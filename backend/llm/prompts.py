@@ -100,6 +100,24 @@ Return strictly valid JSON only.
 """
 
 
+SUMMARY_SYSTEM_PROMPT = """You rewrite a deterministic analytical answer for clarity using only the supplied verified facts and draft.
+Do not calculate, infer causality, add recommendations, or introduce facts. Preserve the headline figure from the draft.
+Return exactly one JSON object with this shape: {\"answer\": \"concise answer\"}.
+"""
+
+
+def build_summary_prompt(question: str, facts: Dict[str, Any], draft: str) -> str:
+    """Build a bounded, explicit prompt for fact-checked answer polishing."""
+    import json
+
+    return (
+        "USER QUESTION:\n" + str(question) +
+        "\n\nVERIFIED FACTS (JSON):\n" + json.dumps(facts, ensure_ascii=False, default=str) +
+        "\n\nDETERMINISTIC DRAFT:\n" + str(draft) +
+        "\n\nRewrite the draft concisely. Output JSON only."
+    )
+
+
 def build_dataset_context(
     schema: Optional[Dict[str, Any]],
     profile: Optional[Dict[str, Any]],
