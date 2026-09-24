@@ -46,16 +46,17 @@
 }
 
 /* ── Hero ──
-   Directly derived from the video atmosphere: luminous ice background (#ecf4fb to #e3edf8),
-   subtle video-cyan light, quiet editorial presence without artificial wallpaper gradients. */
+   Background image: generated premium atmospheric background (hero_background.jpg),
+   layered with video-derived radial accent overlays for interactive glow effects.
+   The image dominates; the gradients are subtle atmospheric reinforcements. */
 .hero {
   position: relative;
   padding: var(--space-16) 0 var(--space-12);
   background:
-    radial-gradient(840px 540px at 80% 40%, rgba(56, 189, 248, 0.08) 0%, transparent 70%),
-    radial-gradient(480px 360px at 86% 46%, rgba(160, 82, 229, 0.05) 0%, transparent 65%),
-    radial-gradient(640px 440px at 12% 28%, rgba(226, 237, 248, 0.65) 0%, transparent 75%),
-    linear-gradient(135deg, var(--video-bg-subtle) 0%, var(--video-background) 45%, var(--video-bg-alt) 100%);
+    radial-gradient(840px 540px at 80% 40%, rgba(56, 189, 248, 0.07) 0%, transparent 70%),
+    radial-gradient(480px 360px at 86% 46%, rgba(160, 82, 229, 0.04) 0%, transparent 65%),
+    radial-gradient(640px 440px at 12% 28%, rgba(226, 237, 248, 0.40) 0%, transparent 75%),
+    url('/hero_background.jpg') center center / cover no-repeat;
   overflow: hidden;
 }
 .hero-grid {
