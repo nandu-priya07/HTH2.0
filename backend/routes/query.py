@@ -4,80 +4,23 @@ Powered by local Ollama Qwen3:8b model and deterministic Pandas executor.
 """
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
-import pandas as pd
 
 from analyst import process_query_with_llm, execute_query, LLMResponse, QueryResult, ResponseType
-from file_processing.schema_inference import infer_schema
-from file_processing.data_profiler import profile_dataset
-from routes.upload import DATASET_REGISTRY, BASE_DIR
+from storage.dataset_manager import get_or_load_dataset
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["query"])
-
-PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
 
 
 class QueryRequest(BaseModel):
     question: Optional[str] = None
     message: Optional[str] = None
     dataset_id: Optional[str] = None
-
-
-def _get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Retrieves the dataset from memory or loads existing processed dataset from disk.
-    """
-    # 1. Check if specific dataset_id is in registry
-    if dataset_id and dataset_id in DATASET_REGISTRY:
-        return DATASET_REGISTRY[dataset_id]
-
-    # 2. If no dataset_id specified, use most recently registered dataset
-    if not dataset_id and DATASET_REGISTRY:
-        return list(DATASET_REGISTRY.values())[-1]
-
-    # 3. Check disk for processed CSV files if registry is empty
-    if PROCESSED_DIR.exists():
-        if dataset_id:
-            target_csv = PROCESSED_DIR / f"{dataset_id}.csv"
-            candidates = [target_csv] if target_csv.exists() else []
-        else:
-            candidates = sorted(list(PROCESSED_DIR.glob("*.csv")), key=lambda p: (p.stat().st_size, p.stat().st_mtime), reverse=True)
-
-        if candidates:
-            csv_path = candidates[0]
-            ds_id = csv_path.stem
-            try:
-                df = pd.read_csv(csv_path)
-                schema = infer_schema(df)
-                profile = profile_dataset(df, schema)
-                ds_entry = {
-                    "dataset_id": ds_id,
-                    "filename": f"{ds_id}.csv",
-                    "file_path": str(csv_path),
-                    "status": "processed",
-                    "data": df,
-                    "result": {
-                        "dataset_id": ds_id,
-                        "schema": schema,
-                        "profile": profile,
-                        "metadata": {
-                            "rows": len(df),
-                            "columns": len(df.columns)
-                        }
-                    }
-                }
-                DATASET_REGISTRY[ds_id] = ds_entry
-                return ds_entry
-            except Exception as e:
-                logger.error(f"Failed to auto-load processed dataset {csv_path}: {e}")
-
-    return None
 
 
 @router.post("/query")
@@ -94,7 +37,7 @@ async def execute_user_query(payload: QueryRequest):
         )
 
     # 1. Retrieve Dataset
-    dataset_info = _get_or_load_dataset(payload.dataset_id)
+    dataset_info = get_or_load_dataset(payload.dataset_id)
     if not dataset_info:
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -106,9 +49,9 @@ async def execute_user_query(payload: QueryRequest):
             }
         )
 
-    schema = dataset_info["result"]["schema"]
-    profile = dataset_info["result"].get("profile")
-    df = dataset_info["data"]
+    schema = dataset_info.get("schema") or dataset_info.get("result", {}).get("schema")
+    profile = dataset_info.get("profile") or dataset_info.get("result", {}).get("profile")
+    df = dataset_info.get("data")
     ds_id = dataset_info.get("dataset_id")
 
     # 2. Call Qwen3:8b Query Processor

@@ -7,22 +7,53 @@ from fastapi import APIRouter, File, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from file_processing.pipeline import process_file, FileProcessingError
+from storage.dataset_manager import (
+    DATASET_REGISTRY,
+    BASE_DIR,
+    RAW_DIR,
+    PROCESSED_DIR,
+    register_dataset,
+    get_or_load_dataset,
+    list_all_datasets,
+    generate_suggestions
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
-# Base uploads directory: backend/uploads/raw
-BASE_DIR = Path(__file__).resolve().parent.parent
-UPLOAD_DIR = BASE_DIR / "uploads" / "raw"
-
+UPLOAD_DIR = RAW_DIR
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 
-# In-memory Dataset Registry for backend consumption
-DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
+@router.get("/datasets")
+async def get_datasets_list():
+    """
+    Returns list of all active/processed datasets with their schema and metadata summaries.
+    """
+    try:
+        datasets = list_all_datasets()
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "datasets": datasets,
+                "total": len(datasets)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error listing datasets: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "error": f"Failed to retrieve datasets: {str(e)}"}
+        )
+
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(None)):
+    """
+    Ingests, validates, profiles, and cleans uploaded CSV/Excel files.
+    """
     # 1. Validate file presence
     if not file or not file.filename or file.filename.strip() == "":
         return JSONResponse(
@@ -104,19 +135,26 @@ async def upload_file(file: UploadFile = File(None)):
             }
         )
 
-    # 6. Store in server-side DATASET_REGISTRY
-    DATASET_REGISTRY[dataset_id] = {
+    # 6. Store in server-side dataset registry
+    dataset_entry = {
         "dataset_id": dataset_id,
         "filename": filename,
         "stored_filename": stored_filename,
         "processed_filename": process_result["processed_filename"],
         "file_path": str(file_path),
+        "file_type": clean_ext,
+        "file_size": file_size,
         "status": "processed",
         "result": process_result,
-        "data": process_result["data"]  # Standardized pd.DataFrame held in memory
+        "data": process_result["data"],  # Standardized pd.DataFrame held in memory
+        "metadata": process_result["metadata"],
+        "schema": process_result["schema"],
+        "profile": process_result["profile"],
+        "cleaning_report": process_result["cleaning_report"]
     }
+    register_dataset(dataset_id, dataset_entry)
 
-    # 7. Return JSON response (Without sending entire 10k-row DataFrame)
+    # 7. Return JSON response
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -135,26 +173,62 @@ async def upload_file(file: UploadFile = File(None)):
         }
     )
 
+
 @router.get("/dataset/{dataset_id}")
 async def get_dataset_info(dataset_id: str):
-    if dataset_id not in DATASET_REGISTRY:
+    """
+    Returns full metadata, schema, and profile for a specific dataset.
+    """
+    ds_info = get_or_load_dataset(dataset_id)
+    if not ds_info:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"success": False, "error": f"Dataset '{dataset_id}' not found in registry"}
         )
 
-    ds_info = DATASET_REGISTRY[dataset_id]
-    res = ds_info["result"]
+    res = ds_info.get("result", {})
+    metadata = ds_info.get("metadata") or res.get("metadata", {})
+    schema = ds_info.get("schema") or res.get("schema", {})
+    profile = ds_info.get("profile") or res.get("profile", {})
+    cleaning_report = ds_info.get("cleaning_report") or res.get("cleaning_report", {})
+
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
             "success": True,
             "dataset_id": dataset_id,
-            "filename": ds_info["filename"],
-            "status": ds_info["status"],
-            "metadata": res["metadata"],
-            "schema": res["schema"],
-            "profile": res["profile"],
-            "cleaning_report": res["cleaning_report"]
+            "filename": ds_info.get("filename", f"{dataset_id}.csv"),
+            "status": ds_info.get("status", "processed"),
+            "metadata": metadata,
+            "schema": schema,
+            "profile": profile,
+            "cleaning_report": cleaning_report
+        }
+    )
+
+
+@router.get("/dataset/{dataset_id}/suggestions")
+async def get_dataset_suggestions_endpoint(dataset_id: str):
+    """
+    Generates dynamic analytical question suggestions based on the dataset's schema and column types.
+    """
+    ds_info = get_or_load_dataset(dataset_id)
+    if not ds_info:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "error": f"Dataset '{dataset_id}' not found in registry"}
+        )
+
+    schema = ds_info.get("schema") or ds_info.get("result", {}).get("schema")
+    profile = ds_info.get("profile") or ds_info.get("result", {}).get("profile")
+
+    suggestions = generate_suggestions(schema, profile)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "success": True,
+            "dataset_id": dataset_id,
+            "suggestions": suggestions
         }
     )
