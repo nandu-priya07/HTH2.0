@@ -1,0 +1,17 @@
+backend/.venv/
+__pycache__/
+*.pyc
+
+frontend/node_modules/
+frontend/dist/
+
+.env
+.env.*
+!.env.example
+
+backend/storage/datasets/*
+backend/storage/uploads/*
+backend/storage/temp/*
+
+.vscode/
+.idea/
