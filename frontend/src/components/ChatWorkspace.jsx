@@ -1,9 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
-import ChatSidebar from './ChatSidebar'
 import ChatMessage from './ChatMessage'
 import SuggestedQuestions from './SuggestedQuestions'
 import ChatInput from './ChatInput'
-import { DatabaseIcon, SparklesIcon, TrashIcon } from './Icons'
+import {
+  DatabaseIcon,
+  TrashIcon,
+  BellIcon,
+  HelpCircleIcon,
+  BarChartIcon,
+  LayoutSidebarIcon,
+  SparklesIcon
+} from './Icons'
 
 export default function ChatWorkspace() {
   const [messages, setMessages] = useState([])
@@ -12,14 +19,13 @@ export default function ChatWorkspace() {
   const [uploadError, setUploadError] = useState(null)
   const [activeDataset, setActiveDataset] = useState(null)
   const [suggestions, setSuggestions] = useState([])
+  const [activeNav, setActiveNav] = useState('Analysis')
   const scrollEndRef = useRef(null)
 
-  // Auto-scroll chat view when messages change
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isLoading])
 
-  // On mount: check for existing datasets in backend
   useEffect(() => {
     const fetchExistingDatasets = async () => {
       try {
@@ -54,7 +60,6 @@ export default function ChatWorkspace() {
     }
   }
 
-  // 1. Send Question via Backend /api/query
   const handleSendMessage = async (textToSend) => {
     const cleanText = textToSend ? textToSend.trim() : input.trim()
     if (!cleanText || isLoading) return
@@ -78,23 +83,15 @@ export default function ChatWorkspace() {
       const data = await response.json()
 
       if (!response.ok) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            sender: 'ai',
-            error: data.error || 'Server returned an error processing your query.'
-          }
-        ])
+        setMessages((prev) => [...prev, { sender: 'ai', error: data.error || 'Server returned an error processing your query.' }])
         return
       }
 
-      // If backend auto-loaded a dataset that we didn't have in state
       if (data.dataset_id && (!activeDataset || activeDataset.dataset_id !== data.dataset_id)) {
         setActiveDataset((prev) => prev || { dataset_id: data.dataset_id, filename: 'Active Dataset' })
         loadSuggestions(data.dataset_id)
       }
 
-      // Formulate AI Message
       const aiMessage = {
         sender: 'ai',
         text: data.text,
@@ -110,22 +107,17 @@ export default function ChatWorkspace() {
 
       setMessages((prev) => [...prev, aiMessage])
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: 'ai',
-          error: 'Failed to connect to backend analytics engine. Please ensure the backend server is running on port 8000.'
-        }
-      ])
+      setMessages((prev) => [...prev, {
+        sender: 'ai',
+        error: 'Failed to connect to backend analytics engine. Please ensure the backend server is running on port 8000.'
+      }])
     } finally {
       setIsLoading(false)
     }
   }
 
-  // 2. Upload File via Backend /api/upload
   const handleSendFile = async (file, optionalText) => {
     if (!file || isLoading) return
-
     setIsLoading(true)
     setUploadError(null)
 
@@ -133,11 +125,7 @@ export default function ChatWorkspace() {
     formData.append('file', file)
 
     try {
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      })
-
+      const response = await fetch('/api/upload', { method: 'POST', body: formData })
       const data = await response.json()
 
       if (!response.ok || !data.success) {
@@ -146,7 +134,6 @@ export default function ChatWorkspace() {
         return
       }
 
-      // Add user message showing the file attachment
       const userMsg = {
         sender: 'user',
         text: optionalText || '',
@@ -158,7 +145,6 @@ export default function ChatWorkspace() {
         }
       }
 
-      // Set active dataset and fetch context-tailored suggestions
       setActiveDataset(data)
       loadSuggestions(data.dataset_id)
 
@@ -173,11 +159,8 @@ export default function ChatWorkspace() {
       setMessages((prev) => [...prev, userMsg, aiMsg])
       setInput('')
 
-      // If user provided a question alongside the file, automatically execute it
       if (optionalText && optionalText.trim()) {
-        setTimeout(() => {
-          handleSendMessage(optionalText.trim())
-        }, 300)
+        setTimeout(() => { handleSendMessage(optionalText.trim()) }, 300)
       }
     } catch (err) {
       setUploadError('Failed to connect to backend server. Make sure FastAPI is running on port 8000.')
@@ -195,92 +178,115 @@ export default function ChatWorkspace() {
   const handleClearDataset = () => {
     setActiveDataset(null)
     setSuggestions([])
-    setMessages((prev) => [
-      ...prev,
-      {
-        sender: 'ai',
-        text: 'Active dataset disconnected. Upload a new CSV or Excel file to analyze a new dataset.'
-      }
-    ])
-  }
-
-  const handleSelectOption = (option) => {
-    handleSendMessage(option)
-  }
-
-  const handleSelectSuggestion = (suggestionText) => {
-    handleSendMessage(suggestionText)
+    setMessages((prev) => [...prev, {
+      sender: 'ai',
+      text: 'Active dataset disconnected. Upload a new CSV or Excel file to analyze a new dataset.'
+    }])
   }
 
   const datasetName = activeDataset?.filename || activeDataset?.result?.metadata?.filename || 'Active Dataset'
   const rowCount = activeDataset?.metadata?.rows || activeDataset?.result?.metadata?.rows || activeDataset?.rows
 
+  const navItems = [
+    { id: 'Dashboard', icon: <BarChartIcon size={15} /> },
+    { id: 'Analysis',  icon: <SparklesIcon size={15} /> },
+    { id: 'Datasets',  icon: <DatabaseIcon size={15} /> },
+  ]
+
   return (
     <div className="chat-workspace-container">
-      {/* 1. LEFT SIDEBAR */}
-      <ChatSidebar
-        onNewChat={handleNewChat}
-        activeDataset={activeDataset}
-        onClearDataset={handleClearDataset}
-        onSelectSavedQuery={(q) => handleSendMessage(q)}
-      />
 
-      {/* 2. MAIN CHAT AREA */}
-      <main className="chat-main-area">
-        {/* Top Floating Active Dataset Bar */}
+      {/* ── TOP NAVIGATION BAR ── */}
+      <nav className="top-navbar" role="navigation" aria-label="Main navigation">
+        {/* Brand */}
+        <div className="navbar-brand" onClick={handleNewChat} role="button" tabIndex={0}
+          onKeyDown={(e) => e.key === 'Enter' && handleNewChat()}>
+          <div className="navbar-logo-mark" aria-hidden="true">H</div>
+          <div className="navbar-brand-text">
+            <span className="navbar-brand-name">HTH2.0</span>
+            <span className="navbar-brand-sub">AI Data Analyst</span>
+          </div>
+        </div>
+
+        {/* Center Nav */}
+        <div className="navbar-nav" role="menubar">
+          {navItems.map(({ id, icon }) => (
+            <button
+              key={id}
+              className={`nav-item${activeNav === id ? ' active' : ''}`}
+              onClick={() => setActiveNav(id)}
+              role="menuitem"
+              aria-current={activeNav === id ? 'page' : undefined}
+            >
+              {icon}
+              {id}
+            </button>
+          ))}
+        </div>
+
+        {/* Right actions */}
+        <div className="navbar-right">
+          <button className="navbar-icon-btn" aria-label="Notifications" title="Notifications">
+            <BellIcon size={17} />
+          </button>
+          <button className="navbar-icon-btn" aria-label="Help" title="Help">
+            <HelpCircleIcon size={17} />
+          </button>
+          <div
+            className="navbar-avatar"
+            role="button"
+            tabIndex={0}
+            aria-label="User profile"
+            title="User profile"
+          >
+            U
+          </div>
+        </div>
+      </nav>
+
+      {/* ── MAIN CONTENT ── */}
+      <main className="chat-main-area" role="main">
+        {/* Active Dataset Bar */}
         {activeDataset && (
           <header className="workspace-top-bar animate-fade-in">
             <div className="top-bar-dataset-info">
-              <DatabaseIcon size={15} className="top-bar-icon" />
+              <DatabaseIcon size={14} className="top-bar-icon" />
               <span className="top-bar-title">{datasetName}</span>
-              {rowCount && (
-                <span className="top-bar-meta">{rowCount.toLocaleString()} rows</span>
-              )}
+              {rowCount && <span className="top-bar-meta">{rowCount.toLocaleString()} rows</span>}
               <span className="top-bar-badge">Engine Active</span>
             </div>
             <div className="top-bar-actions">
-              <button
-                className="top-bar-btn"
-                onClick={handleClearDataset}
-                title="Disconnect Dataset"
-              >
-                <TrashIcon size={14} />
+              <button className="top-bar-btn" onClick={handleClearDataset} title="Disconnect Dataset">
+                <TrashIcon size={13} />
                 <span>Disconnect</span>
               </button>
             </div>
           </header>
         )}
 
+        {/* Messages or Welcome */}
         <div className="chat-scroll-container">
           {messages.length === 0 ? (
             <SuggestedQuestions
-              onSelectSuggestion={handleSelectSuggestion}
+              onSelectSuggestion={(text) => handleSendMessage(text)}
               activeDataset={activeDataset}
               suggestions={suggestions}
             />
           ) : (
-            messages.map((msg, index) => (
+            messages.map((msg, i) => (
               <ChatMessage
-                key={index}
+                key={i}
                 message={msg}
-                onSelectOption={handleSelectOption}
+                onSelectOption={(opt) => handleSendMessage(opt)}
               />
             ))
           )}
 
-          {isLoading && (
-            <ChatMessage
-              message={{
-                sender: 'ai',
-                isLoading: true
-              }}
-            />
-          )}
-
+          {isLoading && <ChatMessage message={{ sender: 'ai', isLoading: true }} />}
           <div ref={scrollEndRef} />
         </div>
 
-        {/* Sticky Composer */}
+        {/* Chat Input */}
         <ChatInput
           input={input}
           setInput={setInput}
