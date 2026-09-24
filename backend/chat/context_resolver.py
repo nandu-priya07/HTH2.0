@@ -54,11 +54,29 @@ class ContextResolver:
         prev_intent = prev_assistant_msg.get("intent") or {}
         prev_result = prev_assistant_msg.get("result") or {}
 
-        # Build compact context for LLM (Requirement 7)
+        # Build clean active analytical state (Requirement STEP 9)
+        active_query = None
+        if prev_spec_dict:
+            active_query = {
+                "operation": prev_spec_dict.get("operation", "sum"),
+                "metric": prev_spec_dict.get("column"),
+                "column": prev_spec_dict.get("column"),
+                "columns": prev_spec_dict.get("columns", []),
+                "aggregation": prev_spec_dict.get("operation", "sum"),
+                "filters": [
+                    f.to_dict() if hasattr(f, "to_dict") else f
+                    for f in (prev_spec_dict.get("filters") or [])
+                ],
+                "group_by": prev_spec_dict.get("group_by", [])
+            }
+        elif prev_intent:
+            active_query = prev_intent
+
+        # Build compact context for LLM (Requirement 7 & STEP 9)
         compact_context = {
             "chat_id": chat_id,
             "available_files": [{"file_id": f.get("file_id"), "filename": f.get("filename")} for f in files],
-            "previous_query": prev_intent or prev_spec_dict,
+            "previous_query": active_query,
             "previous_result": prev_result,
             "current_user_query": clean_q
         }
@@ -148,17 +166,33 @@ class ContextResolver:
             r"\bwhat\s+about\b",
             r"\bhow\s+about\b",
             r"\bcompare\s+(?:this\s+)?with\b",
+            r"\bcompare\b",
             r"\bnow\s+(?:for|calculate|show|get|filter)\b",
-            r"\balso\s+for\b"
+            r"\balso\s+for\b",
+            r"\bonly\b"
         ]
 
         has_trigger = any(re.search(t, q_lower) for t in follow_up_triggers)
 
-        # Grade value extraction e.g. "for B grade", "for B", "grade B", "for A+", "for O", "for C"
+        # Multi-grade comparison pattern: e.g. "show only A and B", "compare O and A+", "only A and B"
+        multi_match = re.search(
+            r"(?:show\s+only|compare|only|show)\s+([A-Za-z0-9\+\*\-]+)\s+and\s+([A-Za-z0-9\+\*\-]+)(?:\s+grades?)?",
+            q_lower
+        )
+        if multi_match:
+            v1 = multi_match.group(1).strip().upper()
+            v2 = multi_match.group(2).strip().upper()
+            ignored_words = {"IT", "THE", "SAME", "FOR", "THIS", "WITH", "CALCULATE", "SHOW", "PLOT", "AGAIN", "ANOTHER", "EACH", "ALL"}
+            if v1 not in ignored_words and v2 not in ignored_words:
+                return True, "condition_values", [v1, v2]
+
+        # Grade value extraction e.g. "only B grade", "only B", "for B grade", "for B", "grade B", "what about O", "what about O?"
         grade_patterns = [
+            r"\bonly\s+([A-Za-z0-9\+\*\-]+)(?:\s+grade)?\b",
             r"(?:for|with|about|show|calculate)?\s*([A-Za-z0-9\+\*\-]+)\s+grade\b",
             r"grade\s+([A-Za-z0-9\+\*\-]+)\b",
-            r"(?:similarly|same|do it|what about|how about|compare with|now for|also for)\s+(?:for\s+)?([A-Za-z0-9\+\*\-]+)\b"
+            r"(?:what\s+about|how\s+about)\s+([A-Za-z0-9\+\*\-]+)\??\b",
+            r"(?:similarly|same|do it|compare with|now for|also for)\s+(?:for\s+)?([A-Za-z0-9\+\*\-]+)\b"
         ]
 
         extracted_val = None
@@ -166,7 +200,7 @@ class ContextResolver:
             match = re.search(pattern, q_lower)
             if match:
                 val = match.group(1).strip().upper()
-                ignored_words = {"IT", "THE", "SAME", "FOR", "THIS", "WITH", "CALCULATE", "SHOW", "PLOT", "AGAIN", "ANOTHER"}
+                ignored_words = {"IT", "THE", "SAME", "FOR", "THIS", "WITH", "CALCULATE", "SHOW", "PLOT", "AGAIN", "ANOTHER", "EACH", "ALL"}
                 if val not in ignored_words:
                     extracted_val = val
                     break
@@ -175,7 +209,7 @@ class ContextResolver:
             return True, "condition_value", extracted_val
 
         if has_trigger:
-            m = re.search(r"(?:similarly|same|do it|what about|how about|now)\s+(?:for\s+)?([a-zA-Z0-9_\s]+)", q_lower)
+            m = re.search(r"(?:similarly|same|do it|what about|how about|now|only)\s+(?:for\s+)?([a-zA-Z0-9_\s]+)", q_lower)
             if m:
                 v = m.group(1).strip().upper()
                 return True, "condition_value", v
@@ -191,21 +225,28 @@ class ContextResolver:
         file_id: Optional[str]
     ) -> QuerySpec:
 
-        op = prev_spec_dict.get("operation", "conditional_count")
+        prev_op = prev_spec_dict.get("operation", "conditional_count")
         col = prev_spec_dict.get("column")
         cols = prev_spec_dict.get("columns") or []
         group_by = prev_spec_dict.get("group_by") or []
 
-        prev_cond = prev_spec_dict.get("condition") or {}
-        cond_op = "equals"
-        if isinstance(prev_cond, dict):
-            cond_op = prev_cond.get("operator", "equals")
-        elif hasattr(prev_cond, "operator"):
-            cond_op = getattr(prev_cond, "operator", "equals")
-
-        if param_type == "condition_value":
-            cond_spec = ConditionSpec(operator=cond_op, value=new_val)
+        # Determine operation and condition when inheriting
+        if param_type == "condition_values":
+            # Multiple values -> multi_column_value_distribution with subset filter
+            op = "multi_column_value_distribution"
+            cond_spec = ConditionSpec(operator="in", value=new_val)
+        elif param_type == "condition_value":
+            # Single value -> conditional_count
+            op = "conditional_count"
+            cond_spec = ConditionSpec(operator="equals", value=new_val)
         else:
+            op = prev_op
+            prev_cond = prev_spec_dict.get("condition") or {}
+            cond_op = "equals"
+            if isinstance(prev_cond, dict):
+                cond_op = prev_cond.get("operator", "equals")
+            elif hasattr(prev_cond, "operator"):
+                cond_op = getattr(prev_cond, "operator", "equals")
             cond_spec = ConditionSpec(operator=cond_op, value=new_val) if prev_cond else None
 
         filters = []

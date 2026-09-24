@@ -11,7 +11,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
@@ -28,23 +28,36 @@ class OllamaClient:
         self.model = model or os.environ.get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
         self.timeout = timeout
 
+    _cached_available = None
+    _last_check_time = 0.0
+
     def is_available(self) -> bool:
-        """Checks if the Ollama service is reachable."""
+        """Checks if the Ollama service is reachable with caching."""
+        import time
+        now = time.time()
+        if OllamaClient._cached_available is not None:
+            cache_duration = 30.0 if OllamaClient._cached_available else 10.0
+            if now - OllamaClient._last_check_time < cache_duration:
+                return OllamaClient._cached_available
         try:
-            with httpx.Client(timeout=3.0) as client:
+            with httpx.Client(timeout=2.0) as client:
                 resp = client.get(f"{self.base_url}/api/tags")
-                return resp.status_code == 200
+                OllamaClient._cached_available = (resp.status_code == 200)
         except Exception:
-            return False
+            OllamaClient._cached_available = False
+        OllamaClient._last_check_time = now
+        return OllamaClient._cached_available
 
     def generate_json(
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0
+        temperature: float = 0.0,
+        think: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Sends system and user prompt to Ollama and expects a structured JSON object response.
+        think=False disables Qwen3's reasoning trace for short, latency-sensitive calls.
         """
         url = f"{self.base_url}/api/generate"
         payload = {
@@ -58,6 +71,8 @@ class OllamaClient:
                 "temperature": temperature
             }
         }
+        if think is not None:
+            payload["think"] = think
 
         try:
             with httpx.Client(timeout=self.timeout) as client:

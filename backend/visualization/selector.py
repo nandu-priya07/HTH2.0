@@ -347,13 +347,92 @@ def select_visualizations(
             visualizations.append(choice_vis)
             return [v.to_dict() for v in visualizations]
 
-        # 1D. Standard Analytical Query (no visualization directive) -> Table & Bar
+        # 1D. Standard Analytical Query (no visualization directive) -> Bar & Table
+        bar_vis = VisualizationConfig(
+            type=VisualizationType.BAR.value,
+            visualization_type=VisualizationType.BAR.value,
+            visualization_required=False,
+            visualization_source="default",
+            title=title,
+            x_key=dim_col,
+            y_key=val_col,
+            orientation="horizontal" if len(records) > 8 else "vertical",
+            format="number",
+            data=records,
+            headers=headers,
+            rows=rows,
+            description=f"Count of '{cond_val}' per column"
+        )
+        visualizations.append(bar_vis)
+
         table_vis = VisualizationConfig(
             type=VisualizationType.TABLE.value,
             visualization_type=VisualizationType.TABLE.value,
             visualization_required=False,
             visualization_source="default",
             title=f"{title} Data",
+            headers=headers,
+            rows=rows,
+            data=records
+        )
+        visualizations.append(table_vis)
+        return [v.to_dict() for v in visualizations]
+
+    # ---------------------------------------------------------
+    # CASE 1B: MULTI-COLUMN VALUE DISTRIBUTION & VALUE DISTRIBUTION
+    # ---------------------------------------------------------
+    if operation in ("multi_column_value_distribution", "value_distribution"):
+        title = "Grade Distribution across Subjects" if operation == "multi_column_value_distribution" else f"Grade Distribution for {target_col or 'Column'}"
+        records = query_result.result if isinstance(query_result.result, list) else []
+        table_payload = query_result.table or {}
+        headers = table_payload.get("headers", ["Subject", "Grade", "Count"])
+        rows = table_payload.get("rows", [])
+
+        dim_col = "subject" if records and "subject" in records[0] else ("column" if records and "column" in records[0] else "Subject")
+        val_col = "count"
+        series_col = "grade" if records and "grade" in records[0] else ("value" if records and "value" in records[0] else None)
+
+        if explicit_type == "table":
+            table_vis = VisualizationConfig(
+                type=VisualizationType.TABLE.value,
+                visualization_type=VisualizationType.TABLE.value,
+                visualization_required=True,
+                visualization_source="user_requested",
+                title=title,
+                headers=headers,
+                rows=rows,
+                data=records
+            )
+            visualizations.append(table_vis)
+            return [v.to_dict() for v in visualizations]
+
+        # Horizontal Bar Chart (Grouped / Stacked)
+        bar_vis = VisualizationConfig(
+            type=VisualizationType.BAR.value,
+            visualization_type=VisualizationType.BAR.value,
+            visualization_required=is_vis_requested,
+            visualization_source="user_requested" if explicit_type else ("automatic" if is_automatic else "default"),
+            requires_user_choice=False,
+            title=title,
+            x_key="count",
+            y_key=dim_col,
+            series_key=series_col,
+            orientation="horizontal",
+            format="number",
+            data=records,
+            headers=headers,
+            rows=rows,
+            description="Grade distribution across subjects"
+        )
+        visualizations.append(bar_vis)
+
+        # Companion Data Table (Pivot Table with all grades)
+        table_vis = VisualizationConfig(
+            type=VisualizationType.TABLE.value,
+            visualization_type=VisualizationType.TABLE.value,
+            visualization_required=False,
+            visualization_source="default",
+            title=f"{title} Table",
             headers=headers,
             rows=rows,
             data=records

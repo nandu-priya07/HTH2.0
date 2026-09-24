@@ -19,13 +19,18 @@ export default function ChatWorkspace() {
     activeDataset, suggestions,
     conversations, activeConversationId, isLoadingConversations, conversationsError,
     fetchConversations, selectConversation, newChat, renameConversation, deleteConversation,
-    sendMessage, sendFile, clearDataset
+    sendMessage, editAndSendMessage, sendFile, clearDataset
   } = useAnalyst()
 
+  const [editingMessageId, setEditingMessageId] = useState(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.matchMedia('(min-width: 900px)').matches)
   const [showSchema, setShowSchema] = useState(false)
   const scrollEndRef = useRef(null)
   const inputRef = useRef(null)
+
+  useEffect(() => {
+    setEditingMessageId(null)
+  }, [activeConversationId])
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -48,16 +53,30 @@ export default function ChatWorkspace() {
   const rendered = messages.map((msg, i) => {
     const isFollowUp = msg.sender === 'user' && !msg.attachment && seenAnswer
     if (msg.sender === 'ai' && (msg.query_spec || msg.table || msg.scalar || msg.visualization)) seenAnswer = true
+    const msgId = msg.id || `msg-${i}`
+    const isEditing = editingMessageId === msgId
+
     return (
       <ChatMessage
-        key={msg.id || i}
+        key={msgId}
         message={msg}
+        messageIndex={i}
         isFollowUp={isFollowUp}
+        isEditing={isEditing}
+        onStartEdit={() => {
+          if (!isLoading) setEditingMessageId(msgId)
+        }}
+        onCancelEdit={() => setEditingMessageId(null)}
+        onSubmitEdit={(newText) => {
+          setEditingMessageId(null)
+          editAndSendMessage?.(i, newText)
+        }}
         onSelectOption={(opt) => sendMessage(opt)}
         onViewFields={viewFields}
         onAskAnother={askAnother}
         measureOptions={measureOptions}
         schemaHints={schemaHints}
+        isLoadingSession={isLoading}
       />
     )
   })

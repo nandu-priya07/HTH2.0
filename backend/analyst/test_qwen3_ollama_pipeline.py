@@ -171,7 +171,10 @@ def test_direct_answer_what_is_profit(superstore_data):
 def test_clarification_sales(superstore_data):
     df, schema, profile = superstore_data
     resp = process_query_with_llm("sales?", schema, profile, df)
-    assert resp.type == "clarification"
+    # With a sales column this asks which aggregation; the fixture may load a dataset without
+    # one, where the answer must say sales isn't available (never compute a substitute).
+    expected = "clarification" if "sales" in df.columns else "not_available"
+    assert resp.type == expected
     assert resp.query is None
     assert "sales" in resp.answer.lower()
 

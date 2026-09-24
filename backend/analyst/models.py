@@ -17,6 +17,8 @@ class QueryOperation(str, Enum):
     MIN = "min"
     MAX = "max"
     CONDITIONAL_COUNT = "conditional_count"
+    MULTI_COLUMN_VALUE_DISTRIBUTION = "multi_column_value_distribution"
+    VALUE_DISTRIBUTION = "value_distribution"
 
 
 class ResponseType(str, Enum):
@@ -24,7 +26,32 @@ class ResponseType(str, Enum):
     DIRECT_ANSWER = "direct_answer"
     CLARIFICATION = "clarification"
     DATA_RESULT = "data_result"
+    NOT_AVAILABLE = "not_available"
+    NO_DATA = "no_data"
     ERROR = "error"
+
+
+class DerivedMetricSpec(BaseModel):
+    """
+    A metric that is not a dataset column but is computed from a controlled
+    derivation rule (see analyst.semantics.DERIVATION_RULES).
+
+    kind="expression"      -> row-level `operands[0] <operator> operands[1]`, then aggregated
+    kind="count_distinct"  -> COUNT DISTINCT source_column (e.g. customer count)
+    """
+    name: str
+    formula: str
+    kind: str = "expression"
+    operator: Optional[str] = None
+    operands: List[str] = Field(default_factory=list)
+    source_column: Optional[str] = None
+    required_columns: List[str] = Field(default_factory=list)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump()
 
 
 class ConditionSpec(BaseModel):
@@ -83,7 +110,16 @@ class QuerySpec(BaseModel):
     filters: List[FilterSpec] = Field(default_factory=list)
     sort: List[SortSpec] = Field(default_factory=list)
     limit: Optional[int] = None
+    measure: Optional[str] = None
+    value_distribution: Optional[bool] = None
+    file_id: Optional[str] = None
     raw_question: Optional[str] = None
+    # Business term the user asked for (e.g. "revenue"), independent of the column chosen.
+    requested_metric: Optional[str] = None
+    # Set when the metric is computed from other columns instead of read directly.
+    derived_metric: Optional[DerivedMetricSpec] = None
+    # Set when a requested concept was mapped to a differently-named column (e.g. revenue -> Sales).
+    metric_mapping: Optional[Dict[str, Any]] = None
 
     def __getitem__(self, item: str) -> Any:
         return getattr(self, item)
@@ -104,6 +140,9 @@ class LLMResponse(BaseModel):
     query: Optional[QuerySpec] = None
     queries: List[QuerySpec] = Field(default_factory=list)
     answer: Optional[str] = None
+    # Structured extras for not_available / clarification responses
+    # (requested_metric, reason, available_fields, options, suggestion).
+    details: Optional[Dict[str, Any]] = None
 
     @property
     def all_queries(self) -> List[QuerySpec]:
@@ -113,6 +152,11 @@ class LLMResponse(BaseModel):
         if self.query:
             return [self.query]
         return []
+
+    @property
+    def primary_query(self) -> Optional[QuerySpec]:
+        """Returns the primary QuerySpec in this response."""
+        return self.query or (self.queries[0] if self.queries else None)
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
@@ -137,6 +181,18 @@ class QueryResult(BaseModel):
     text: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+    # Canonical result fields: "success" | "no_data" | "not_available" | "error"
+    status: str = "success"
+    summary: Optional[str] = None
+    fields_used: Optional[List[str]] = None
+    filters_applied: Optional[List[Dict[str, Any]]] = None
+    rows_before_filter: Optional[int] = None
+    rows_after_filter: Optional[int] = None
+    aggregation: Optional[str] = None
+    group_by: Optional[List[str]] = None
+    calculation_steps: Optional[List[str]] = None
+    derived_metric: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()

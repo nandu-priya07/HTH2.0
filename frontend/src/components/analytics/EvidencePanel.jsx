@@ -7,6 +7,7 @@ import { ShieldCheckIcon } from '../ui/Icons'
 export default function EvidencePanel({ evidence, compact = false }) {
   if (!evidence) return null
   const rows = [
+    ['Metric', evidence.metric],
     ['Fields Used', evidence.fields?.length ? evidence.fields.join(', ') : null],
     ['Rows', evidence.rows !== undefined && evidence.rows !== null
       ? `${Number(evidence.rows).toLocaleString()}${evidence.filteredRows !== undefined && evidence.filteredRows !== evidence.rows ? ` → ${Number(evidence.filteredRows).toLocaleString()} after filters` : ''}`

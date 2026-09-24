@@ -40,12 +40,15 @@ export function buildExplanation(message) {
   if (!spec) return null
 
   const op = String(spec.operation || 'count').toLowerCase()
-  const measure = spec.column || (spec.columns && spec.columns[0]) || null
+  const derived = spec.derived_metric || message.derived_metric || null
+  const isExpression = derived?.kind === 'expression'
+  const measure = isExpression ? derived.name : spec.column || (spec.columns && spec.columns[0]) || null
   const groupBy = spec.group_by || []
   const filters = spec.filters || []
   const sort = spec.sort || []
   const limit = spec.limit
   const meta = message.metadata || {}
+  const mapping = spec.metric_mapping || meta.metric_mapping || null
 
   /* Intent chips */
   const intent = []
@@ -55,30 +58,42 @@ export function buildExplanation(message) {
   if (groupBy.length && (sort.length || limit)) intent.push(limit ? 'TOP-N' : 'RANK')
   else if (groupBy.length) intent.push('COMPARE')
 
-  /* Fields */
-  const fields = [...new Set([measure, ...(spec.columns || []), ...groupBy, ...filters.map((f) => f.column), ...sort.map((s) => s.column)].filter(Boolean))]
+  /* Fields — derived metrics list their real input columns, not the computed name */
+  const inputs = isExpression ? derived.operands || [] : [measure]
+  const fields = meta.fields_used?.length
+    ? meta.fields_used
+    : [...new Set([...inputs, ...(spec.columns || []), ...groupBy, ...filters.map((f) => f.column), ...sort.map((s) => s.column)].filter(Boolean))]
 
   /* Pseudo-query expression */
   const agg = OP_LABEL[op] || op.toUpperCase()
-  let expr = `${agg}(${measure || '*'})`
+  const measureExpr = isExpression ? derived.formula : measure
+  let expr = `${agg}(${measureExpr || '*'})`
   if (filters.length) expr += ` WHERE ${filters.map(fmtFilter).join(' AND ')}`
   if (spec.condition && measure) expr += `${filters.length ? ' AND' : ' WHERE'} ${measure} ${fmtCondition(spec.condition)}`
   if (groupBy.length) expr += ` GROUP BY ${groupBy.join(', ')}`
   if (sort.length) expr += ` ORDER BY ${sort.map((s) => `${s.column} ${String(s.direction || 'desc').toUpperCase()}`).join(', ')}`
   if (limit) expr += ` LIMIT ${limit}`
 
-  /* Plain-language steps */
+  /* Plain-language steps: prefer the executor's own record of what it did */
   const steps = []
-  if (measure) steps.push(`Identified “${measure}” as the field to measure.`)
-  if (groupBy.length) steps.push(`Identified ${groupBy.map((g) => `“${g}”`).join(' and ')} as the grouping field${groupBy.length > 1 ? 's' : ''}.`)
-  if (filters.length) steps.push(`Kept only rows where ${filters.map(fmtFilter).join(' and ')}.`)
-  if (spec.condition && measure) steps.push(`Kept only rows where ${measure} ${fmtCondition(spec.condition)}.`)
-  if (groupBy.length) steps.push(`Grouped records by ${groupBy.join(', ')}.`)
-  steps.push(`${OP_WORD[op] || 'Applied ' + agg + ' to'} ${measure ? `“${measure}”` : 'the matching records'}${groupBy.length ? ' within each group' : ''}.`)
-  if (sort.length) steps.push(`Sorted results by ${sort.map((s) => `${s.column} (${s.direction === 'asc' ? 'ascending' : 'descending'})`).join(', ')}.`)
-  if (limit) steps.push(`Kept the top ${limit} result${limit > 1 ? 's' : ''}.`)
-  if (meta.rows_analyzed !== undefined) {
-    steps.push(`Analyzed ${Number(meta.rows_analyzed).toLocaleString()} rows${meta.filtered_rows !== undefined && meta.filtered_rows !== meta.rows_analyzed ? ` (${Number(meta.filtered_rows).toLocaleString()} after filters)` : ''}.`)
+  if (isExpression) steps.push(`“${derived.name}” is not a column in the dataset, so it was derived as ${derived.formula}.`)
+  else if (derived?.kind === 'count_distinct') steps.push(`Counted ${derived.name.replace('_', ' ')} as ${derived.formula}.`)
+  else if (mapping?.via_synonym) steps.push(`Used the “${mapping.column}” field for “${mapping.requested}”.`)
+  const backendSteps = message.calculation_steps || meta.calculation_steps
+  if (backendSteps?.length) {
+    steps.push(...backendSteps)
+  } else {
+    if (measure && !isExpression) steps.push(`Identified “${measure}” as the field to measure.`)
+    if (groupBy.length) steps.push(`Identified ${groupBy.map((g) => `“${g}”`).join(' and ')} as the grouping field${groupBy.length > 1 ? 's' : ''}.`)
+    if (filters.length) steps.push(`Kept only rows where ${filters.map(fmtFilter).join(' and ')}.`)
+    if (spec.condition && measure) steps.push(`Kept only rows where ${measure} ${fmtCondition(spec.condition)}.`)
+    if (groupBy.length) steps.push(`Grouped records by ${groupBy.join(', ')}.`)
+    steps.push(`${OP_WORD[op] || 'Applied ' + agg + ' to'} ${measure ? `“${measure}”` : 'the matching records'}${groupBy.length ? ' within each group' : ''}.`)
+    if (sort.length) steps.push(`Sorted results by ${sort.map((s) => `${s.column} (${s.direction === 'asc' ? 'ascending' : 'descending'})`).join(', ')}.`)
+    if (limit) steps.push(`Kept the top ${limit} result${limit > 1 ? 's' : ''}.`)
+    if (meta.rows_analyzed !== undefined) {
+      steps.push(`Analyzed ${Number(meta.rows_analyzed).toLocaleString()} rows${meta.filtered_rows !== undefined && meta.filtered_rows !== meta.rows_analyzed ? ` (${Number(meta.filtered_rows).toLocaleString()} after filters)` : ''}.`)
+    }
   }
 
   return {
@@ -89,6 +104,9 @@ export function buildExplanation(message) {
     result: summarizeResult(message),
     steps,
     evidence: {
+      metric: derived
+        ? `${derived.name.replace('_', ' ')} — derived metric (${derived.formula})`
+        : mapping?.via_synonym ? `${mapping.requested} — using ${mapping.column}` : null,
       fields,
       rows: meta.rows_analyzed,
       filteredRows: meta.filtered_rows,

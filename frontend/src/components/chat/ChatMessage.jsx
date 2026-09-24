@@ -1,3 +1,4 @@
+import { useRef, useState, useEffect } from 'react'
 import {
   SparklesIcon,
   PaperclipIcon,
@@ -8,7 +9,9 @@ import {
   CornerDownRightIcon,
   UploadIcon,
   CheckCircleIcon,
-  TargetIcon
+  TargetIcon,
+  EditIcon,
+  SendIcon
 } from '../ui/Icons'
 import { Link } from '../ui/primitives'
 import VisualizationRenderer from '../visualization/VisualizationRenderer'
@@ -88,13 +91,19 @@ function ClarificationCard({ message, measureOptions, onSelectOption }) {
   )
 }
 
+const UNANSWERED_TITLES = {
+  not_available: "This isn't available in the current dataset",
+  no_data: 'No matching records'
+}
+
 function UnanswerableCard({ message, onViewFields, onAskAnother }) {
+  const title = UNANSWERED_TITLES[message.status] || "I couldn't answer this from the current dataset."
   return (
     <div className="state-card state-unanswerable" role="alert">
       <div className="state-card-head">
         <span className="state-card-icon"><AlertTriangleIcon size={16} /></span>
         <div>
-          <div className="state-card-title">I couldn't answer this from the current dataset.</div>
+          <div className="state-card-title">{title}</div>
           {message.error && <div className="state-card-sub">{message.error}</div>}
         </div>
       </div>
@@ -163,14 +172,151 @@ function DecisionAnalysis({ decision_analysis }) {
   )
 }
 
+function UserMessageItem({
+  message,
+  isFollowUp,
+  isEditing,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
+  isLoadingSession
+}) {
+  const { text, attachment } = message
+  const [draftText, setDraftText] = useState(text || '')
+  const textareaRef = useRef(null)
+
+  // Keep draft in sync if edit mode toggles or original text changes
+  useEffect(() => {
+    if (isEditing) {
+      setDraftText(text || '')
+    }
+  }, [isEditing, text])
+
+  // Auto-focus and place cursor at the end
+  useEffect(() => {
+    if (isEditing && textareaRef.current) {
+      const el = textareaRef.current
+      el.focus()
+      const len = el.value.length
+      el.setSelectionRange(len, len)
+    }
+  }, [isEditing])
+
+  const handleCancel = () => {
+    setDraftText(text || '')
+    onCancelEdit?.()
+  }
+
+  const handleSend = () => {
+    const clean = draftText.trim()
+    if (!clean || isLoadingSession) return
+    if (clean === (text || '').trim()) {
+      onCancelEdit?.()
+      return
+    }
+    onSubmitEdit?.(clean)
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      handleCancel()
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  return (
+    <div className={`msg msg-user animate-slide-up${isEditing ? ' is-editing' : ''}`}>
+      {isFollowUp && !isEditing && (
+        <span className="msg-followup-tag"><CornerDownRightIcon size={12} /> Follow-up</span>
+      )}
+
+      {isEditing ? (
+        <div className="msg-user-edit-card" role="region" aria-label="Edit message">
+          <textarea
+            ref={textareaRef}
+            className="msg-user-edit-textarea"
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask a question about your data…"
+            disabled={isLoadingSession}
+            aria-label="Edit message text"
+          />
+          <div className="msg-user-edit-actions">
+            <span className="msg-user-edit-hint">
+              <kbd>Esc</kbd> cancel · <kbd>↵</kbd> send
+            </span>
+            <div className="msg-user-edit-btns">
+              <button
+                type="button"
+                className="btn-edit-cancel"
+                onClick={handleCancel}
+                disabled={isLoadingSession}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-edit-send"
+                onClick={handleSend}
+                disabled={isLoadingSession || !draftText.trim()}
+              >
+                <span>Send</span>
+                <SendIcon size={12} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="msg-user-row">
+          <button
+            type="button"
+            className="msg-user-edit-btn"
+            onClick={onStartEdit}
+            title="Edit message"
+            aria-label="Edit message"
+            disabled={isLoadingSession}
+          >
+            <EditIcon size={13} />
+          </button>
+
+          <div className="msg-user-bubble">
+            {attachment && (
+              <div className="msg-attachment">
+                <span className="msg-attachment-icon"><PaperclipIcon size={15} /></span>
+                <span>
+                  <span className="msg-attachment-name">{attachment.filename}</span>
+                  {attachment.file_size && (
+                    <span className="msg-attachment-meta">{formatBytes(attachment.file_size)} · {attachment.file_type?.toUpperCase() || 'FILE'}</span>
+                  )}
+                </span>
+              </div>
+            )}
+            {text && <div className="msg-user-text">{text}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ChatMessage({
   message,
+  messageIndex,
   onSelectOption,
   onViewFields,
   onAskAnother,
   isFollowUp = false,
+  isEditing = false,
+  onStartEdit,
+  onCancelEdit,
+  onSubmitEdit,
   measureOptions = [],
-  schemaHints
+  schemaHints,
+  isLoadingSession = false
 }) {
   const {
     sender,
@@ -191,31 +337,26 @@ export default function ChatMessage({
 
   if (sender === 'user') {
     return (
-      <div className="msg msg-user animate-slide-up">
-        {isFollowUp && (
-          <span className="msg-followup-tag"><CornerDownRightIcon size={12} /> Follow-up</span>
-        )}
-        <div className="msg-user-bubble">
-          {attachment && (
-            <div className="msg-attachment">
-              <span className="msg-attachment-icon"><PaperclipIcon size={15} /></span>
-              <span>
-                <span className="msg-attachment-name">{attachment.filename}</span>
-                {attachment.file_size && (
-                  <span className="msg-attachment-meta">{formatBytes(attachment.file_size)} · {attachment.file_type?.toUpperCase() || 'FILE'}</span>
-                )}
-              </span>
-            </div>
-          )}
-          {text && <div className="msg-user-text">{text}</div>}
-        </div>
-      </div>
+      <UserMessageItem
+        message={message}
+        isFollowUp={isFollowUp}
+        isEditing={isEditing}
+        onStartEdit={onStartEdit}
+        onCancelEdit={onCancelEdit}
+        onSubmitEdit={onSubmitEdit}
+        isLoadingSession={isLoadingSession}
+      />
     )
   }
 
   const isClarification = status === 'clarification' || status === 'NEEDS_CLARIFICATION'
-  const isUnanswerable = !isClarification && !errorKind && (status === 'error' || (error && !text))
-  const hasVis = visualization || (visualizations && visualizations.length > 0) || table || scalar
+  const isUnanswerable = !isClarification && !errorKind &&
+    (status === 'error' || status === 'not_available' || status === 'no_data' || (error && !text))
+  // A single number is already stated in the answer; only show a KPI card when one was asked for.
+  const visList = visualizations?.length ? visualizations : visualization ? [visualization] : []
+  const isPlainScalar = Boolean(scalar) && !table && text &&
+    visList.every((v) => (v.visualization_type || v.type) === 'kpi' && !v.visualization_required)
+  const hasVis = !isPlainScalar && (visList.length > 0 || table || scalar)
   const trace = !isClarification && !isUnanswerable ? buildExplanation(message) : null
   const followUps = trace ? buildFollowUps(query_spec, schemaHints) : []
 

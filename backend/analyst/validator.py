@@ -16,7 +16,9 @@ SUPPORTED_OPERATIONS = {
     "distinct",
     "min",
     "max",
-    "conditional_count"
+    "conditional_count",
+    "multi_column_value_distribution",
+    "value_distribution"
 }
 
 NUMERIC_OPERATIONS = {
@@ -74,11 +76,29 @@ def validate_query_spec(
 
         return True, None
 
-    # 2. Validate single column / columns for standard operations
+    # 2. Validate multi_column_value_distribution and value_distribution
+    if op in ("multi_column_value_distribution", "value_distribution"):
+        target_cols = spec.columns or ([spec.column] if spec.column else [])
+        if not target_cols:
+            return False, f"Operation '{op}' requires at least one target column in 'columns' or 'column'."
+
+        for col in target_cols:
+            if col.lower() not in df_col_lower_map:
+                return False, f"Column '{col}' does not exist in dataset."
+
+        # Condition is optional for distribution (null for full distribution)
+        if spec.condition:
+            cond_op = str(spec.condition.get("operator", "equals") if isinstance(spec.condition, dict) else spec.condition.operator).lower()
+            if cond_op not in VALID_CONDITION_OPERATORS:
+                return False, f"Unsupported condition operator '{cond_op}'."
+
+        return True, None
+
+    # 3. Validate single column / columns for standard operations
     if spec.column:
         col_actual = df_col_lower_map.get(spec.column.lower())
         if not col_actual:
-            return False, f"Target column '{spec.column}' does not exist in dataset."
+            return False, f"The dataset does not contain a field corresponding to '{spec.column}'."
 
         if op in NUMERIC_OPERATIONS:
             col_series = df[col_actual]
@@ -91,7 +111,7 @@ def validate_query_spec(
     elif spec.columns:
         for col in spec.columns:
             if col.lower() not in df_col_lower_map:
-                return False, f"Column '{col}' does not exist in dataset."
+                return False, f"The dataset does not contain a field corresponding to '{col}'."
 
     elif op != "count":
         return False, f"Operation '{op}' requires a target column."
@@ -100,14 +120,14 @@ def validate_query_spec(
     if spec.group_by:
         for g_col in spec.group_by:
             if g_col.lower() not in df_col_lower_map:
-                return False, f"Group by column '{g_col}' does not exist in dataset."
+                return False, f"The dataset does not contain a field corresponding to '{g_col}'."
 
     # 4. Validate filter columns
     if spec.filters:
         for f in spec.filters:
             col_name = f.get("column") if isinstance(f, dict) else f.column
             if not col_name or col_name.lower() not in df_col_lower_map:
-                return False, f"Filter column '{col_name}' does not exist in dataset."
+                return False, f"The dataset does not contain a field corresponding to '{col_name}'."
 
     # 5. Validate sort columns
     if spec.sort:
@@ -116,7 +136,7 @@ def validate_query_spec(
             if s_col and s_col.lower() not in df_col_lower_map and s_col.lower() not in ("value", "count"):
                 if spec.column and s_col.lower() == spec.column.lower():
                     continue
-                return False, f"Sort column '{s_col}' does not exist in dataset."
+                return False, f"The dataset does not contain a field corresponding to '{s_col}'."
 
     # 6. Validate limit
     if spec.limit is not None:

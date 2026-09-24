@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 
 from analyst import process_query_with_llm, execute_query, execute_queries, LLMResponse, QueryResult, ResponseType
 from analyst.models import QuerySpec
+from analyst.follow_up import resolve_analytical_follow_up, AGGREGATE_OPS
+from analyst.semantics import apply_semantic_layer
+from analyst.summarizer import generate_answer, describe_no_data
 from storage.dataset_manager import get_or_load_dataset
 from visualization.selector import select_visualizations
 from chat import get_chat_service
@@ -167,20 +170,47 @@ async def execute_user_query(payload: QueryRequest):
     queries: List[QuerySpec] = []
     llm_resp: Optional[LLMResponse] = None
 
-    if resolved_spec:
+    # 5a. Aggregate follow-ups ("what about Germany?", "break that down by region", "average instead")
+    #     are resolved deterministically against the previous plan. The grade-oriented context
+    #     resolver must not reinterpret them as conditional counts.
+    prev_spec_dict = next((m.query_spec for m in reversed(history)
+                           if m.role == "assistant" and m.query_spec and m.file_id in (None, ds_id)), None)
+    aggregate_follow_up = resolve_analytical_follow_up(raw_query, prev_spec_dict, df)
+    if aggregate_follow_up is not None:
+        follow_resp = apply_semantic_layer(
+            LLMResponse(type="data_query", query=aggregate_follow_up, queries=[aggregate_follow_up]),
+            raw_query, df)
+        if follow_resp.type == "data_query":
+            resolved_spec = follow_resp.all_queries[0]
+        else:
+            resolved_spec = None
+            llm_resp = follow_resp
+    elif resolved_spec is not None and prev_spec_dict and \
+            str(prev_spec_dict.get("operation") or "").lower() in AGGREGATE_OPS:
+        resolved_spec = None
+
+    if llm_resp is None and resolved_spec:
         # Context Resolver successfully inherited previous query state (Requirement 5 & 15)
         queries = [resolved_spec]
         llm_resp = LLMResponse(type="data_query", query=resolved_spec, queries=queries)
-    else:
+    elif llm_resp is None:
         # Call Query Processor with LLM
         try:
-            llm_resp = process_query_with_llm(
-                question=raw_query,
-                schema=schema,
-                profile=profile,
-                df=df,
-                dataset_id=ds_id
-            )
+            call_kwargs = {
+                "question": raw_query,
+                "schema": schema,
+                "profile": profile,
+                "df": df,
+                "dataset_id": ds_id
+            }
+            prev_q = compact_context.get("previous_query")
+            if prev_q:
+                import inspect
+                sig = inspect.signature(process_query_with_llm)
+                if "previous_query" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                    call_kwargs["previous_query"] = prev_q
+
+            llm_resp = process_query_with_llm(**call_kwargs)
         except ConnectionError:
             err_text = "The local query model is currently unavailable. Please make sure Ollama is running."
             assistant_msg = chat_service.add_assistant_message(
@@ -249,9 +279,11 @@ async def execute_user_query(payload: QueryRequest):
     # 7. Handle Clarification
     if llm_resp and (llm_resp.type == ResponseType.CLARIFICATION.value or llm_resp.type == "clarification"):
         answer_text = llm_resp.answer or "Could you please clarify your question?"
+        options = (llm_resp.details or {}).get("options")
         assistant_msg = chat_service.add_assistant_message(
             conversation_id=cid,
             content=answer_text,
+            result_json={"status": "clarification", "options": options} if options else None,
             file_id=ds_id
         )
         return JSONResponse(
@@ -265,6 +297,37 @@ async def execute_user_query(payload: QueryRequest):
                 "status": "clarification",
                 "answer": answer_text,
                 "text": answer_text,
+                "options": options,
+                "dataset_id": ds_id
+            }
+        )
+
+    # 7b. Requested metric / period isn't in the dataset and can't be derived: say so, never estimate.
+    if llm_resp and llm_resp.type == ResponseType.NOT_AVAILABLE.value:
+        answer_text = llm_resp.answer or "That information isn't available in this dataset."
+        details = llm_resp.details or {}
+        assistant_msg = chat_service.add_assistant_message(
+            conversation_id=cid,
+            content=answer_text,
+            result_json={"status": "not_available", **details},
+            file_id=ds_id
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "conversation_id": cid,
+                "chat_id": cid,
+                "user_message": user_msg.to_dict(),
+                "assistant_message": assistant_msg.to_dict(),
+                "type": "not_available",
+                "status": "not_available",
+                "answer": answer_text,
+                "text": answer_text,
+                "summary": answer_text,
+                "requested_metric": details.get("requested_metric"),
+                "reason": details.get("reason"),
+                "available_fields": details.get("available_fields"),
+                "suggestion": details.get("suggestion"),
                 "dataset_id": ds_id
             }
         )
@@ -295,8 +358,42 @@ async def execute_user_query(payload: QueryRequest):
 
     exec_res: QueryResult = execute_queries(exec_queries, df)
 
+    # 8b. Valid query, zero matching rows: report it instead of falling back to the whole dataset.
+    if not exec_res.success and exec_res.status == "no_data":
+        failed_spec = next((q for q in exec_queries
+                            if exec_res.filters_applied == [f.to_dict() for f in q.filters]), exec_queries[0])
+        no_data_text = describe_no_data(failed_spec, exec_res, df)
+        assistant_msg = chat_service.add_assistant_message(
+            conversation_id=cid,
+            content=no_data_text,
+            result_json={"status": "no_data", "metadata": exec_res.metadata,
+                         "filters_applied": exec_res.filters_applied},
+            query_spec={**failed_spec.to_dict(), "file_id": ds_id},
+            file_id=ds_id
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "conversation_id": cid,
+                "chat_id": cid,
+                "user_message": user_msg.to_dict(),
+                "assistant_message": assistant_msg.to_dict(),
+                "type": "no_data",
+                "status": "no_data",
+                "answer": no_data_text,
+                "text": no_data_text,
+                "summary": no_data_text,
+                "query_spec": {**failed_spec.to_dict(), "file_id": ds_id},
+                "filters_applied": exec_res.filters_applied,
+                "rows_before_filter": exec_res.rows_before_filter,
+                "rows_after_filter": 0,
+                "metadata": exec_res.metadata,
+                "dataset_id": ds_id
+            }
+        )
+
     if not exec_res.success:
-        err_text = f"Error executing query: {exec_res.error}"
+        err_text = exec_res.error or "Error executing query."
         assistant_msg = chat_service.add_assistant_message(
             conversation_id=cid,
             content=err_text,
@@ -317,7 +414,13 @@ async def execute_user_query(payload: QueryRequest):
             }
         )
 
-    # 9. Select Visualizations
+    # 9. Natural-language answer from the deterministic result (LLM may only rephrase verified facts)
+    answer_text, answer_source = generate_answer(raw_query, exec_queries, exec_res)
+    if answer_text:
+        exec_res.text = answer_text
+        exec_res.summary = answer_text
+
+    # 9b. Select Visualizations
     primary_spec = exec_queries[0] if exec_queries else None
     visualizations = select_visualizations(
         spec=primary_spec,
@@ -339,6 +442,20 @@ async def execute_user_query(payload: QueryRequest):
     if query_spec_payload:
         query_spec_payload["file_id"] = ds_id
 
+    canonical = {
+        "status": "success",
+        "summary": exec_res.summary,
+        "answer_source": answer_source,
+        "fields_used": exec_res.fields_used,
+        "filters_applied": exec_res.filters_applied,
+        "rows_before_filter": exec_res.rows_before_filter,
+        "rows_after_filter": exec_res.rows_after_filter,
+        "aggregation": exec_res.aggregation,
+        "group_by": exec_res.group_by,
+        "calculation_steps": exec_res.calculation_steps,
+        "derived_metric": exec_res.derived_metric,
+    }
+
     structured_result = {
         "query": exec_res.query,
         "queries": exec_res.queries,
@@ -349,7 +466,8 @@ async def execute_user_query(payload: QueryRequest):
         "scalar": exec_res.scalar,
         "scalars": exec_res.scalars,
         "list": exec_res.list,
-        "metadata": exec_res.metadata
+        "metadata": exec_res.metadata,
+        **canonical
     }
 
     # Persist Assistant Message in conversation.json
@@ -371,7 +489,8 @@ async def execute_user_query(payload: QueryRequest):
             "user_message": user_msg.to_dict(),
             "assistant_message": assistant_msg.to_dict(),
             "type": "data_result",
-            "status": "success",
+            **canonical,
+            "query_plan": query_spec_payload,
             "query": exec_res.query,
             "queries": exec_res.queries,
             "query_spec": query_spec_payload,

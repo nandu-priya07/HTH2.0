@@ -31,7 +31,7 @@
 
 /* ── Decisions ── */
 .decision-list { display: grid; gap: var(--space-5); }
-.decision-entry { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); overflow: hidden; }
+.decision-entry { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); overflow: hidden; }
 .decision-entry-main { padding: var(--space-6); }
 .decision-entry-side { padding: var(--space-6); background: var(--color-bg); border-left: var(--border); }
 .decision-entry .section-label { display: inline-flex; align-items: center; gap: 6px; }

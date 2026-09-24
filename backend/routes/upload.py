@@ -21,6 +21,8 @@ from storage.dataset_manager import (
 )
 from chat import get_chat_service
 from chat.models import utc_now_iso
+from file_processing.insights_generator import generate_dataset_insights
+from file_processing.decision_generator import generate_dataset_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ def process_and_store_chat_file(
     content: bytes,
     filename: str,
     chat_id: str
-) -> Tuple_File_Meta_Res:
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Saves raw and cleaned dataset files inside storage/chats/{chat_id}/files/,
     indexes schema, and registers file metadata in conversation.json.
@@ -47,7 +49,7 @@ def process_and_store_chat_file(
     clean_ext = ext.lstrip(".")
     file_id = f"file_{uuid.uuid4().hex[:8]}"
 
-    raw_path = chat_dir / f"{file_id}.{clean_ext}"
+    raw_path = chat_dir / f"{file_id}.raw.{clean_ext}"
     with open(raw_path, "wb") as f:
         f.write(content)
 
@@ -60,12 +62,18 @@ def process_and_store_chat_file(
 
     processed_path = chat_dir / process_result["processed_filename"]
 
-    # Also mirror processed file into PROCESSED_DIR for legacy dataset compatibility
+    # Also mirror raw and processed file into RAW_DIR and PROCESSED_DIR for legacy dataset compatibility
     try:
+        if RAW_DIR.exists():
+            with open(RAW_DIR / f"{file_id}.csv", "wb") as f:
+                f.write(content)
+            if clean_ext != "csv":
+                with open(RAW_DIR / f"{file_id}.{clean_ext}", "wb") as f:
+                    f.write(content)
         if PROCESSED_DIR.exists():
             shutil.copy2(processed_path, PROCESSED_DIR / f"{file_id}.csv")
     except Exception as e:
-        logger.warning(f"Failed to mirror processed CSV to PROCESSED_DIR: {e}")
+        logger.warning(f"Failed to mirror files to uploads/: {e}")
 
     file_meta = {
         "file_id": file_id,
@@ -178,6 +186,7 @@ async def upload_file_to_chat(
 
     try:
         file_meta, process_result = process_and_store_chat_file(content, filename, chat_id)
+        service.associate_dataset(chat_id, file_meta["file_id"])
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
@@ -383,3 +392,46 @@ async def get_dataset_suggestions_endpoint(dataset_id: str):
             "suggestions": suggestions
         }
     )
+
+
+@router.get("/api/dataset/{dataset_id}/insights")
+async def get_dataset_insights_endpoint(dataset_id: str):
+    """
+    Returns dynamically computed analytical insights, comparisons, time-series trends,
+    and outlier anomalies for the requested dataset.
+    """
+    ds_info = get_or_load_dataset(dataset_id)
+    if not ds_info:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "error": f"Dataset '{dataset_id}' not found in registry"}
+        )
+
+    df = ds_info.get("data")
+    schema = ds_info.get("schema") or ds_info.get("result", {}).get("schema", {})
+    profile = ds_info.get("profile") or ds_info.get("result", {}).get("profile", {})
+
+    insights = generate_dataset_insights(df=df, schema=schema, profile=profile, dataset_id=dataset_id)
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, **insights})
+
+
+@router.get("/api/dataset/{dataset_id}/decisions")
+async def get_dataset_decisions_endpoint(dataset_id: str):
+    """
+    Returns dynamically computed evidence-backed decision findings,
+    comparisons, concentration, trends, and anomalies for the requested dataset.
+    """
+    ds_info = get_or_load_dataset(dataset_id)
+    if not ds_info:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"success": False, "error": f"Dataset '{dataset_id}' not found in registry"}
+        )
+
+    df = ds_info.get("data")
+    schema = ds_info.get("schema") or ds_info.get("result", {}).get("schema", {})
+    profile = ds_info.get("profile") or ds_info.get("result", {}).get("profile", {})
+
+    decisions = generate_dataset_decisions(df=df, schema=schema, profile=profile, dataset_id=dataset_id)
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, **decisions})
+
