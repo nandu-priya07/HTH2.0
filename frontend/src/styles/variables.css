@@ -7,38 +7,77 @@
 :root {
   color-scheme: light;
 
-  /* ── Brand palette ── */
+  /* ── QueryLens brand palette ──
+     Deep teal is the core brand. The hero video (a luminous blue/cyan world on ice)
+     is the visual anchor; the UI echoes its *roles*, not its blue:
+       cyan light-arcs     → Cyan   = active analysis
+       green delta arrows  → Sage   = validated / positive
+       location pin        → Coral  = geographic attention
+       warm trend stroke   → Yellow = discovery / key data point
+     Accents are information, not decoration: ~80% of the UI stays neutral. */
   --teal-900: #064E55;
   --teal-700: #076670;
   --teal-600: #097C87;   /* Deep Teal — primary */
   --teal-100: #D7EFEF;
   --teal-50:  #EAF7F7;
 
-  --cyan-500: #23CED9;   /* Bright Cyan — accent */
+  --cyan-500: #23CED9;   /* Bright Cyan — analysis accent (not text-safe) */
+  --cyan-700: #0B8F9B;   /* text-safe cyan */
   --cyan-100: #D4F5F7;
 
-  --coral-500: #FCA47C;  /* Coral — location / highlight */
+  --coral-500: #FCA47C;  /* Coral — geographic attention */
   --coral-700: #B8532A;  /* text-safe coral */
   --coral-100: #FEEBE2;
 
-  --yellow-500: #F9D779; /* Warm Yellow */
+  --yellow-500: #F9D779; /* Warm Yellow — discovery */
   --yellow-800: #7A5B00; /* text-safe yellow */
   --yellow-100: #FDF5DC;
 
-  --sage-500: #A1CCA6;   /* Soft Sage */
+  --sage-500: #A1CCA6;   /* Soft Sage — validation */
   --sage-800: #2E6B38;   /* text-safe sage */
   --sage-100: #E7F3E8;
 
+  /* ── Semantic signal roles (color = meaning) ── */
+  --signal-core:      var(--teal-600);
+  --signal-analysis:  var(--cyan-500);
+  --signal-geo:       var(--coral-500);
+  --signal-discovery: var(--yellow-500);
+  --signal-valid:     var(--sage-500);
+
+  /* ── --ql-* aliases used by the home / hero styles, mapped onto the brand ── */
+  --ql-primary:          var(--teal-600);
+  --ql-primary-dark:     var(--teal-700);
+  --ql-ink:              #0B3B42;   /* deepest brand ink: headings, avatar */
+  --ql-electric:         var(--cyan-700);
+  --ql-cyan:             var(--cyan-500);
+  --ql-cyan-bright:      #6FE0E7;
+  --ql-ice:              var(--teal-50);
+  --ql-bg:               #F8FCFB;
+  --ql-bg-warm:          #FBFAF6;   /* warm off-white — keeps the page from feeling sterile */
+  --ql-bg-alt:           #F1F8F7;
+  --ql-surface:          #FFFFFF;
+  --ql-surface-blue:     #F4FAF9;   /* legacy name — now a soft teal-mist surface */
+  --ql-text:             #102F35;
+  --ql-text-secondary:   #557177;
+  --ql-text-tertiary:    #7A9398;
+  --ql-border:           #DDEDEC;
+  --ql-border-strong:    #C4DFDD;
+  --ql-blue-glow:        rgba(9, 124, 135, 0.14);
+  --ql-cyan-glow:        rgba(35, 206, 217, 0.20);
+  --ql-card-shadow:      0 14px 36px -6px rgba(16, 47, 53, 0.10);
+  --ql-success:          #3E8E52;
+  --ql-violet:           var(--coral-500);  /* retired: the violet accent now maps to coral */
+
   /* ── Semantic roles ── */
-  --color-bg:          #F8FCFB;
-  --color-bg-alt:      #F1FAF9;
-  --color-surface:     #FFFFFF;
+  --color-bg:          var(--ql-bg);
+  --color-bg-alt:      var(--ql-bg-alt);
+  --color-surface:     var(--ql-surface);
   --color-surface-2:   #FBFEFD;
-  --color-text:        #102F35;
-  --color-text-2:      #557177;
-  --color-text-3:      #7A9398;
-  --color-border:      #DDEDEC;
-  --color-border-strong: #C4DFDD;
+  --color-text:        var(--ql-text);
+  --color-text-2:      var(--ql-text-secondary);
+  --color-text-3:      var(--ql-text-tertiary);
+  --color-border:      var(--ql-border);
+  --color-border-strong: var(--ql-border-strong);
   --color-primary:     var(--teal-600);
   --color-primary-hover: var(--teal-700);
   --color-primary-soft: var(--teal-50);
@@ -123,7 +162,7 @@
   --border: 1px solid var(--color-border);
   --border-strong: 1px solid var(--color-border-strong);
 
-  /* ── Shadows ── (soft, teal-tinted, never huge) */
+  /* ── Shadows ── (soft, teal-ink tinted depth) */
   --shadow-xs: 0 1px 2px rgba(16, 47, 53, 0.05);
   --shadow-sm: 0 2px 6px rgba(16, 47, 53, 0.06);
   --shadow-md: 0 8px 24px -8px rgba(16, 47, 53, 0.12);

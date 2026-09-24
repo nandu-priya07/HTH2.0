@@ -1,25 +1,45 @@
-import HeroVisualization from '../components/hero/HeroVisualization'
+import { useState } from 'react'
+import QueryLensHeroVisual from '../components/hero/QueryLensHeroVisual'
 import PipelineSection from '../components/home/PipelineSection'
 import SchemaAgnosticSection from '../components/home/SchemaAgnosticSection'
 import AnswerPreviewSection from '../components/home/AnswerPreviewSection'
 import { Link } from '../components/ui/primitives'
-import { ArrowRightIcon, UploadIcon, CheckIcon } from '../components/ui/Icons'
+import { ArrowRightIcon, UploadIcon } from '../components/ui/Icons'
+
+/* Product signals — each tone matches the part of the hero visual it lights up on hover:
+   cyan = incoming data nodes, sage = data-quality card, coral = the located answer. */
+const HERO_SIGNALS = [
+  { id: 'signal-data', label: 'Any dataset', tone: 'analysis', mark: 'ring' },
+  { id: 'signal-schema', label: 'No fixed schema', tone: 'valid', mark: 'diamond' },
+  { id: 'signal-explain', label: 'Explainable answers', tone: 'geo', mark: 'arrow' }
+]
 
 export default function HomePage() {
+  const [hoveredCta, setHoveredCta] = useState(null)
+
   return (
     <div className="home">
       <section className="hero" aria-labelledby="hero-title">
         <div className="container hero-grid">
           <div className="hero-copy">
-            <span className="eyebrow eyebrow-badge">
-              <span className="eyebrow-dot" aria-hidden="true" />
+            {/* Coordinate ruler: the lat/long of the "West Region" marker on the globe */}
+            <div className="hero-ruler" aria-hidden="true">
+              <span className="hero-ruler-coord">37.77°N</span>
+              <span className="hero-ruler-track">
+                <span className="hero-ruler-tick is-discovery" />
+              </span>
+              <span className="hero-ruler-coord">122.42°W</span>
+            </div>
+
+            <span className="eyebrow hero-eyebrow">
+              <span className="hero-eyebrow-signal" aria-hidden="true" />
               Natural Language Data Analyst
             </span>
 
             <h1 id="hero-title" className="hero-title">
               <span className="hero-title-line-1">Ask your data.</span>
               <span className="hero-title-line-2">
-                <span className="hero-gradient-text">See what matters.</span>
+                See what <span className="hero-mark">matters.</span>
               </span>
             </h1>
 
@@ -28,28 +48,40 @@ export default function HomePage() {
             </p>
 
             <div className="hero-ctas">
-              <Link to="/ask-ai" className="btn-3d btn-3d-primary">
+              <Link
+                to="/ask-ai"
+                className="btn-3d btn-3d-primary"
+                onMouseEnter={() => setHoveredCta('explore')}
+                onMouseLeave={() => setHoveredCta(null)}
+              >
                 Explore your data <ArrowRightIcon size={16} />
               </Link>
-              <Link to="/upload" className="btn-3d btn-3d-secondary">
+              <Link
+                to="/upload"
+                className="btn-3d btn-3d-secondary"
+                onMouseEnter={() => setHoveredCta('upload')}
+                onMouseLeave={() => setHoveredCta(null)}
+              >
                 <UploadIcon size={16} /> Upload dataset
               </Link>
             </div>
 
-            <div className="hero-feature-strip">
-              <span className="hero-feature-item">
-                <CheckIcon size={13} className="hero-feature-icon" /> Any dataset
-              </span>
-              <span className="hero-feature-item">
-                <CheckIcon size={13} className="hero-feature-icon" /> No fixed schema
-              </span>
-              <span className="hero-feature-item">
-                <CheckIcon size={13} className="hero-feature-icon" /> Explainable answers
-              </span>
-            </div>
+            <ul className="hero-signals" aria-label="What QueryLens handles">
+              {HERO_SIGNALS.map((s) => (
+                <li
+                  key={s.id}
+                  className={`hero-signal signal-${s.tone}`}
+                  onMouseEnter={() => setHoveredCta(s.id)}
+                  onMouseLeave={() => setHoveredCta(null)}
+                >
+                  <span className={`hero-signal-mark mark-${s.mark}`} aria-hidden="true" />
+                  {s.label}
+                </li>
+              ))}
+            </ul>
           </div>
 
-          <HeroVisualization />
+          <QueryLensHeroVisual hoveredCta={hoveredCta} />
         </div>
 
         <div className="container">

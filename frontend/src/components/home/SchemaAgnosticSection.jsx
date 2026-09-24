@@ -5,7 +5,7 @@ const DATASETS = [
   {
     name: 'SALES',
     fields: ['Revenue', 'Region', 'Product', 'Date'],
-    tone: 'teal'
+    tone: 'blue'
   },
   {
     name: 'RETAIL',
@@ -15,7 +15,7 @@ const DATASETS = [
   {
     name: 'OPERATIONS',
     fields: ['Cost', 'Plant', 'Department', 'Month'],
-    tone: 'sage'
+    tone: 'ice'
   }
 ]
 
@@ -61,10 +61,10 @@ export default function SchemaAgnosticSection() {
           <div className="schema-hub-card">
             <div className="schema-hub-mark" aria-hidden="true">
               <svg viewBox="0 0 32 32" width="26" height="26">
-                <rect width="32" height="32" rx="8" fill="var(--teal-600)" />
+                <rect width="32" height="32" rx="8" fill="var(--color-primary)" />
                 <rect x="8" y="17" width="4" height="7" rx="1.5" fill="#fff" />
                 <rect x="14" y="12" width="4" height="12" rx="1.5" fill="#fff" opacity="0.85" />
-                <rect x="20" y="8" width="4" height="16" rx="1.5" fill="var(--cyan-500)" />
+                <rect x="20" y="8" width="4" height="16" rx="1.5" fill="var(--color-accent)" />
               </svg>
             </div>
             <div className="schema-hub-info">
