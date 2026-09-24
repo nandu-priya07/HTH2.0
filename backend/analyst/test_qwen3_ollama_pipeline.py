@@ -185,25 +185,43 @@ def test_clarification_show_locations(superstore_data):
 
 
 def test_api_endpoint_queries(superstore_data):
+    df, schema, profile = superstore_data
+    from storage.dataset_manager import register_dataset
+    ds_id = "test_superstore_id"
+    register_dataset(ds_id, {
+        "dataset_id": ds_id,
+        "filename": "superstore.csv",
+        "data": df,
+        "schema": schema,
+        "profile": profile,
+        "result": {
+            "dataset_id": ds_id,
+            "schema": schema,
+            "profile": profile,
+            "metadata": {"rows": len(df), "columns": len(df.columns)}
+        }
+    })
     client = TestClient(app)
 
     # 1. Data query
-    r1 = client.post("/api/query", json={"question": "show sales by region"})
+    r1 = client.post("/api/query", json={"question": "show sales by region", "dataset_id": ds_id})
     assert r1.status_code == 200
     d1 = r1.json()
     assert d1["type"] == "data_result"
     assert d1["query"]["operation"] == "sum"
     assert len(d1["result"]) == 4
+    assert d1.get("visualization") is not None
+    assert d1["visualization"]["type"] == "bar"
 
     # 2. Direct answer
-    r2 = client.post("/api/query", json={"question": "Hello"})
+    r2 = client.post("/api/query", json={"question": "Hello", "dataset_id": ds_id})
     assert r2.status_code == 200
     d2 = r2.json()
     assert d2["type"] == "direct_answer"
     assert len(d2["answer"]) > 0
 
     # 3. Clarification
-    r3 = client.post("/api/query", json={"question": "sales?"})
+    r3 = client.post("/api/query", json={"question": "sales?", "dataset_id": ds_id})
     assert r3.status_code == 200
     d3 = r3.json()
     assert d3["type"] == "clarification"

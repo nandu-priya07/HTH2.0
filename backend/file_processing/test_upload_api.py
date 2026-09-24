@@ -2,7 +2,7 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 from main import app
-from routes.upload import DATASET_REGISTRY
+from storage.dataset_manager import DATASET_REGISTRY
 
 client = TestClient(app)
 
@@ -36,6 +36,39 @@ def test_api_upload_success_csv():
     assert get_json["dataset_id"] == dataset_id
     assert get_json["filename"] == "sales_sample.csv"
 
+
+def test_api_get_datasets_list():
+    """Test GET /api/datasets returns list of datasets"""
+    response = client.get("/api/datasets")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "datasets" in data
+    assert isinstance(data["datasets"], list)
+    assert len(data["datasets"]) > 0
+
+
+def test_api_get_dataset_suggestions():
+    """Test GET /api/dataset/{dataset_id}/suggestions generates valid suggestions"""
+    # 1. Get first dataset
+    datasets_resp = client.get("/api/datasets")
+    assert datasets_resp.status_code == 200
+    datasets = datasets_resp.json()["datasets"]
+    assert len(datasets) > 0
+
+    ds_id = datasets[0]["dataset_id"]
+
+    # 2. Get suggestions for dataset
+    sugg_resp = client.get(f"/api/dataset/{ds_id}/suggestions")
+    assert sugg_resp.status_code == 200
+    sugg_data = sugg_resp.json()
+    assert sugg_data["success"] is True
+    assert sugg_data["dataset_id"] == ds_id
+    assert "suggestions" in sugg_data
+    assert isinstance(sugg_data["suggestions"], list)
+    assert len(sugg_data["suggestions"]) >= 3
+
+
 def test_api_upload_unsupported_file():
     """Test POST /api/upload with unsupported file extension (.pdf)"""
     pdf_content = b"%PDF-1.4 dummy pdf data"
@@ -47,6 +80,7 @@ def test_api_upload_unsupported_file():
     assert json_resp["success"] is False
     assert "Unsupported file type" in json_resp["error"]
 
+
 def test_api_upload_empty_file():
     """Test POST /api/upload with zero-byte file"""
     file = ("empty.csv", io.BytesIO(b""), "text/csv")
@@ -56,6 +90,7 @@ def test_api_upload_empty_file():
     json_resp = response.json()
     assert json_resp["success"] is False
     assert "empty" in json_resp["error"].lower()
+
 
 def test_api_upload_persists_raw_and_processed_files():
     """
@@ -117,6 +152,7 @@ def test_api_upload_persists_raw_and_processed_files():
             raw_path.unlink()
         if processed_path.exists():
             processed_path.unlink()
+
 
 def test_api_upload_failed_processing_no_processed_file():
     """Verify that failed processing does not leave a processed file in uploads/processed/"""

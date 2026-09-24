@@ -2,12 +2,11 @@ import { useState } from 'react'
 import {
   SparklesIcon,
   PaperclipIcon,
-  TableIcon,
-  CopyIcon,
   CodeIcon,
   AlertCircleIcon,
   BarChartIcon
 } from './Icons'
+import VisualizationRenderer from './visualization/VisualizationRenderer'
 
 export default function ChatMessage({ message, onSelectOption }) {
   const {
@@ -20,12 +19,13 @@ export default function ChatMessage({ message, onSelectOption }) {
     query_spec,
     metadata,
     attachment,
+    visualization,
+    visualizations,
     isLoading,
     error
   } = message
 
   const [showSpec, setShowSpec] = useState(false)
-  const [copied, setCopied] = useState(false)
 
   const formatFileSize = (bytes) => {
     if (!bytes) return ''
@@ -33,30 +33,6 @@ export default function ChatMessage({ message, onSelectOption }) {
     const sizes = ['B', 'KB', 'MB', 'GB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
-  }
-
-  const handleCopyTable = () => {
-    if (!table || !table.headers || !table.rows) return
-    const csvContent = [
-      table.headers.join(','),
-      ...table.rows.map((row) => row.join(','))
-    ].join('\n')
-    navigator.clipboard.writeText(csvContent)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  // Calculate maximum numeric value in table for proportional bar indicators
-  const getColumnMax = (colIndex) => {
-    if (!table || !table.rows) return 0
-    let maxVal = 0
-    table.rows.forEach((r) => {
-      const val = parseFloat(r[colIndex])
-      if (!isNaN(val) && val > maxVal) {
-        maxVal = val
-      }
-    })
-    return maxVal
   }
 
   if (sender === 'user') {
@@ -116,90 +92,17 @@ export default function ChatMessage({ message, onSelectOption }) {
                 </div>
               )}
 
-              {/* 1. SCALAR KPI METRIC CARD */}
-              {scalar && (
-                <div className="scalar-kpi-card">
-                  <div className="kpi-header">
-                    <span className="kpi-label">{scalar.metric || 'Calculated Metric'}</span>
-                    {scalar.aggregation && (
-                      <span className="kpi-badge">
-                        {scalar.aggregation.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                  <div className="kpi-value-row">
-                    <div className="kpi-number">
-                      {typeof scalar.value === 'number'
-                        ? scalar.value.toLocaleString(undefined, { maximumFractionDigits: 2 })
-                        : scalar.value}
-                    </div>
-                  </div>
-                  {metadata && metadata.rows_analyzed && (
-                    <div className="kpi-footer">
-                      <span className="kpi-meta-dot"></span>
-                      <span>Analyzed across {metadata.rows_analyzed.toLocaleString()} records</span>
-                    </div>
-                  )}
-                </div>
+              {/* DYNAMIC VISUALIZATION LAYER (Chart / KPI / Table / Multi-section) */}
+              {(visualization || (visualizations && visualizations.length > 0) || table || scalar) && (
+                <VisualizationRenderer
+                  visualization={visualization}
+                  visualizations={visualizations}
+                  table={table}
+                  scalar={scalar}
+                />
               )}
 
-              {/* 2. GROUPED / DETAIL DATA TABLE */}
-              {table && table.headers && table.rows && (
-                <div className="ai-table-card">
-                  <div className="table-card-header">
-                    <div className="table-card-title">
-                      <TableIcon size={15} />
-                      <span>Data Results ({table.rows.length} rows)</span>
-                    </div>
-                    <button className="table-action-btn" onClick={handleCopyTable} title="Copy table as CSV">
-                      <CopyIcon size={13} />
-                      <span>{copied ? 'Copied!' : 'Copy CSV'}</span>
-                    </button>
-                  </div>
-
-                  <div className="table-wrapper">
-                    <table className="analytics-table">
-                      <thead>
-                        <tr>
-                          {table.headers.map((h, i) => (
-                            <th key={i} className={i > 0 && typeof table.rows[0]?.[i] === 'number' ? 'text-right' : ''}>
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {table.rows.map((row, rIdx) => (
-                          <tr key={rIdx}>
-                            {row.map((cell, cIdx) => {
-                              const isNum = typeof cell === 'number'
-                              const maxVal = isNum ? getColumnMax(cIdx) : 0
-                              const pct = maxVal > 0 ? Math.min((cell / maxVal) * 100, 100) : 0
-
-                              return (
-                                <td key={cIdx} className={isNum ? 'text-right cell-numeric' : ''}>
-                                  <div className="cell-content-wrapper">
-                                    <span>
-                                      {isNum ? cell.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(cell ?? '-')}
-                                    </span>
-                                    {isNum && maxVal > 0 && (
-                                      <div className="mini-progress-bar">
-                                        <div className="mini-progress-fill" style={{ width: `${pct}%` }}></div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </td>
-                              )
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* 3. CLARIFICATION PILL OPTIONS */}
+              {/* CLARIFICATION PILL OPTIONS */}
               {status === 'NEEDS_CLARIFICATION' && options && options.length > 0 && (
                 <div className="clarification-options-card">
                   <div className="clarification-title">
@@ -221,7 +124,7 @@ export default function ChatMessage({ message, onSelectOption }) {
                 </div>
               )}
 
-              {/* 4. ERROR CARD */}
+              {/* ERROR CARD */}
               {error && (
                 <div className="ai-error-card">
                   <AlertCircleIcon size={16} />
@@ -229,7 +132,7 @@ export default function ChatMessage({ message, onSelectOption }) {
                 </div>
               )}
 
-              {/* 5. QUERY SPEC TRANSPARENCY ACCORDION */}
+              {/* QUERY SPEC TRANSPARENCY ACCORDION */}
               {query_spec && (
                 <div className="query-spec-accordion">
                   <button
@@ -240,7 +143,7 @@ export default function ChatMessage({ message, onSelectOption }) {
                     <CodeIcon size={12} />
                     <span>
                       Query Spec: {query_spec.operation || 'analysis'}
-                      {query_spec.metric ? ` • ${query_spec.metric}` : ''}
+                      {query_spec.metric || query_spec.column ? ` • ${query_spec.metric || query_spec.column}` : ''}
                       {query_spec.aggregation ? ` (${query_spec.aggregation})` : ''}
                     </span>
                     <span className="spec-caret">{showSpec ? '▲' : '▼'}</span>
