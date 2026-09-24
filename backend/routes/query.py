@@ -1,6 +1,6 @@
 """
 API Route for Natural Language Query Processing and Analytics Execution.
-Integrates the Analyst module with FastAPI and active datasets.
+Powered by local Ollama Qwen3:8b model and deterministic Pandas executor.
 """
 
 import logging
@@ -11,7 +11,7 @@ from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 import pandas as pd
 
-from analyst import process_query, execute_query, QueryStatus, ResultType
+from analyst import process_query_with_llm, execute_query, LLMResponse, QueryResult, ResponseType
 from file_processing.schema_inference import infer_schema
 from file_processing.data_profiler import profile_dataset
 from routes.upload import DATASET_REGISTRY, BASE_DIR
@@ -24,7 +24,8 @@ PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
 
 
 class QueryRequest(BaseModel):
-    question: str
+    question: Optional[str] = None
+    message: Optional[str] = None
     dataset_id: Optional[str] = None
 
 
@@ -46,7 +47,7 @@ def _get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str,
             target_csv = PROCESSED_DIR / f"{dataset_id}.csv"
             candidates = [target_csv] if target_csv.exists() else []
         else:
-            candidates = sorted(list(PROCESSED_DIR.glob("*.csv")), key=lambda p: p.stat().st_mtime, reverse=True)
+            candidates = sorted(list(PROCESSED_DIR.glob("*.csv")), key=lambda p: (p.stat().st_size, p.stat().st_mtime), reverse=True)
 
         if candidates:
             csv_path = candidates[0]
@@ -79,238 +80,146 @@ def _get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str,
     return None
 
 
-def _format_summary_text(spec: Any, result: Any) -> str:
-    """Formats human-friendly summary text from QueryResult."""
-    if result.result_type == "list":
-        col_name = result.column or spec.column or "column"
-        count = result.count if result.count is not None else len(result.values or [])
-        filter_desc = ""
-        if spec.filters:
-            f_parts = [f"{f['column'] if isinstance(f, dict) else f.column} {f['operator'] if isinstance(f, dict) else f.operator} {f['value'] if isinstance(f, dict) else f.value}" for f in spec.filters]
-            filter_desc = f" (filtered by {', '.join(f_parts)})"
-        return f"Found **{count}** unique values for **{col_name}**{filter_desc}:"
-
-    if result.result_type == "scalar":
-        val = result.value
-        agg = spec.aggregation or "total"
-        metric_name = spec.metric or spec.column or "metric"
-        if isinstance(val, float):
-            formatted_val = f"{val:,.2f}"
-        elif isinstance(val, int):
-            formatted_val = f"{val:,}"
-        else:
-            formatted_val = str(val)
-
-        filter_desc = ""
-        if spec.filters:
-            f_parts = [f"{f['column'] if isinstance(f, dict) else f.column} {f['operator'] if isinstance(f, dict) else f.operator} {f['value'] if isinstance(f, dict) else f.value}" for f in spec.filters]
-            filter_desc = f" (filtered by {', '.join(f_parts)})"
-
-        return f"The **{agg}** of **{metric_name}** is **{formatted_val}**{filter_desc}."
-
-    if result.result_type in ("table", "detail"):
-        row_count = len(result.rows) if result.rows else 0
-        if spec.operation == "trend":
-            gran = spec.time_granularity or "period"
-            return f"Here is the **{spec.metric}** trend broken down by **{gran}** ({row_count} periods analyzed):"
-        if spec.group_by:
-            group_str = ", ".join(spec.group_by)
-            metric_desc = f"**{spec.metric}**" if spec.metric else "records"
-            return f"Breakdown of {metric_desc} grouped by **{group_str}** ({row_count} groups found):"
-        return f"Here are the {row_count} matching records based on your question:"
-
-    return "Analysis completed successfully."
-
-
 @router.post("/query")
+@router.post("/chat")
 async def execute_user_query(payload: QueryRequest):
     """
-    Main endpoint for taking natural language questions, executing them against active dataset,
-    and returning structured AI analyst results with charts/tables.
+    Main endpoint for Qwen3:8b query routing and Pandas analytics execution.
     """
-    question = payload.question.strip()
-    if not question:
+    raw_query = (payload.question or payload.message or "").strip()
+    if not raw_query:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"success": False, "error": "Question cannot be empty"}
+            content={"type": "error", "error": "Question or message cannot be empty."}
         )
 
     # 1. Retrieve Dataset
     dataset_info = _get_or_load_dataset(payload.dataset_id)
     if not dataset_info:
-        spec = process_query(question=question, schema=None)
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
-                "success": True,
-                "status": QueryStatus.NO_DATASET.value,
-                "text": "Please upload a CSV or Excel dataset first before asking data-analysis questions. Click the **+** button below to attach a file.",
-                "query_spec": spec.to_dict()
+                "type": "direct_answer",
+                "status": "no_dataset",
+                "answer": "Please upload a CSV or Excel dataset first before asking data-analysis questions. Click the **+** button below to attach a file.",
+                "text": "Please upload a CSV or Excel dataset first before asking data-analysis questions. Click the **+** button below to attach a file."
             }
         )
 
     schema = dataset_info["result"]["schema"]
     profile = dataset_info["result"].get("profile")
     df = dataset_info["data"]
+    ds_id = dataset_info.get("dataset_id")
 
-    # 2. Process Natural Language Query into QuerySpec
-    spec = process_query(question=question, schema=schema, profile=profile)
-
-    # 3. Handle Non-Valid Query Statuses
-    if spec.status == QueryStatus.CONVERSATIONAL:
+    # 2. Call Qwen3:8b Query Processor
+    try:
+        llm_resp: LLMResponse = process_query_with_llm(
+            question=raw_query,
+            schema=schema,
+            profile=profile,
+            df=df,
+            dataset_id=ds_id
+        )
+    except ConnectionError as e:
         return JSONResponse(
-            status_code=status.HTTP_200_OK,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
-                "success": True,
-                "status": spec.status,
-                "text": spec.message or "Hello! I am your AI Data Analyst. Ask me anything about your uploaded dataset.",
-                "query_spec": spec.to_dict()
+                "type": "error",
+                "status": "error",
+                "error": "The local query model is currently unavailable. Please make sure Ollama is running.",
+                "text": "The local query model is currently unavailable. Please make sure Ollama is running."
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error processing query with Qwen3: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "type": "error",
+                "status": "error",
+                "error": f"An error occurred while processing your query: {str(e)}",
+                "text": f"An error occurred while processing your query: {str(e)}"
             }
         )
 
-    if spec.status == QueryStatus.IRRELEVANT:
+    # 3. Handle Direct Answer
+    if llm_resp.type == ResponseType.DIRECT_ANSWER.value or llm_resp.type == "direct_answer":
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
-                "success": True,
-                "status": spec.status,
-                "text": spec.message or "This question does not appear to be related to the uploaded dataset. Please ask a question related to your data columns.",
-                "query_spec": spec.to_dict()
+                "type": "direct_answer",
+                "status": "conversational",
+                "answer": llm_resp.answer,
+                "text": llm_resp.answer,
+                "dataset_id": ds_id
             }
         )
 
-    if spec.status == QueryStatus.NEEDS_CLARIFICATION:
+    # 4. Handle Clarification
+    if llm_resp.type == ResponseType.CLARIFICATION.value or llm_resp.type == "clarification":
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
-                "success": True,
-                "status": spec.status,
-                "reason": spec.reason,
-                "text": spec.message,
-                "options": spec.options,
-                "detected_column": spec.detected_column,
-                "time_range": spec.time_range,
-                "query_spec": spec.to_dict()
+                "type": "clarification",
+                "status": "clarification",
+                "answer": llm_resp.answer,
+                "text": llm_resp.answer,
+                "dataset_id": ds_id
             }
         )
 
-    if spec.status == QueryStatus.INVALID:
-        err_msg = spec.error.get("message") if isinstance(spec.error, dict) else (spec.error.message if spec.error else "Invalid query specification.")
+    # 5. Handle Data Query -> Execute with Pandas
+    if llm_resp.type == ResponseType.DATA_QUERY.value or llm_resp.type == "data_query":
+        query_spec = llm_resp.query
+        if not query_spec:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "type": "clarification",
+                    "status": "clarification",
+                    "answer": "Could you please specify which metric or column you would like to analyze?",
+                    "text": "Could you please specify which metric or column you would like to analyze?",
+                    "dataset_id": ds_id
+                }
+            )
+
+        exec_res: QueryResult = execute_query(query_spec, df)
+
+        if not exec_res.success:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "type": "error",
+                    "status": "error",
+                    "error": exec_res.error,
+                    "text": f"Error executing query: {exec_res.error}",
+                    "dataset_id": ds_id
+                }
+            )
+
+        # Build response payload for frontend
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
-                "success": False,
-                "status": spec.status,
-                "text": f"I couldn't process this query: {err_msg}",
-                "error": err_msg,
-                "query_spec": spec.to_dict()
+                "type": "data_result",
+                "status": "success",
+                "query": exec_res.query,
+                "result": exec_res.result,
+                "table": exec_res.table,
+                "scalar": exec_res.scalar,
+                "list": exec_res.list,
+                "text": exec_res.text,
+                "metadata": exec_res.metadata,
+                "dataset_id": ds_id
             }
         )
-
-    # 4. Execute Valid QuerySpec
-    res = execute_query(spec, df)
-    if not res.success:
-        err_msg = res.error.get("message") if isinstance(res.error, dict) else "Query execution failed."
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "success": False,
-                "status": "EXECUTION_ERROR",
-                "text": f"An error occurred while analyzing the dataset: {err_msg}",
-                "error": err_msg,
-                "query_spec": spec.to_dict()
-            }
-        )
-
-    # 5. Build Formatted Response
-    summary_text = _format_summary_text(spec, res)
-
-    list_data = None
-    if res.result_type == ResultType.LIST.value or res.values is not None:
-        list_data = {
-            "column": res.column or spec.column,
-            "values": res.values or [],
-            "count": res.count if res.count is not None else len(res.values or [])
-        }
-
-    table_data = None
-    if res.result_type in (ResultType.TABLE.value, ResultType.DETAIL.value, ResultType.LIST.value):
-        table_data = {
-            "headers": res.columns or ([res.column] if res.column else ["value"]),
-            "rows": res.rows or ([[v] for v in (res.values or [])])
-        }
-
-    scalar_data = None
-    if res.result_type == ResultType.SCALAR.value:
-        scalar_data = {
-            "metric": spec.metric or spec.column,
-            "aggregation": spec.aggregation or spec.operation,
-            "value": res.value
-        }
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
-            "success": True,
-            "status": QueryStatus.VALID.value,
-            "text": summary_text,
-            "result_type": res.result_type,
-            "list": list_data,
-            "table": table_data,
-            "scalar": scalar_data,
-            "metadata": res.metadata,
-            "query_spec": spec.to_dict(),
-            "dataset_id": dataset_info.get("dataset_id")
+            "type": "direct_answer",
+            "answer": llm_resp.answer or "I processed your request.",
+            "text": llm_resp.answer or "I processed your request.",
+            "dataset_id": ds_id
         }
     )
-
-
-@router.get("/datasets")
-async def list_available_datasets():
-    """Lists loaded or available datasets with column metadata."""
-    _get_or_load_dataset()  # Auto-load if available
-    datasets = []
-    for ds_id, info in DATASET_REGISTRY.items():
-        res_info = info.get("result", {})
-        schema = res_info.get("schema", {})
-        cols = [c["name"] for c in schema.get("columns", [])] if "columns" in schema else []
-        datasets.append({
-            "dataset_id": ds_id,
-            "filename": info.get("filename", f"{ds_id}.csv"),
-            "rows": res_info.get("metadata", {}).get("rows", len(info.get("data", []))),
-            "columns_count": len(cols),
-            "columns": cols[:8]
-        })
-    return {"success": True, "datasets": datasets}
-
-
-@router.get("/dataset/{dataset_id}/suggestions")
-async def get_dynamic_suggestions(dataset_id: str):
-    """Generates context-aware recommended questions based on dataset columns."""
-    dataset_info = _get_or_load_dataset(dataset_id)
-    if not dataset_info:
-        return {"success": False, "suggestions": []}
-
-    schema = dataset_info["result"]["schema"]
-    num_cols = schema.get("numeric_columns", [])
-    cat_cols = schema.get("categorical_columns", [])
-    date_cols = schema.get("date_columns", [])
-
-    suggestions = []
-    if num_cols and cat_cols:
-        suggestions.append(f"What is the total {num_cols[0]} by {cat_cols[0]}?")
-        suggestions.append(f"Show the top 5 {cat_cols[0]} by {num_cols[0]}")
-    if len(num_cols) > 1 and cat_cols:
-        suggestions.append(f"Average {num_cols[1]} by {cat_cols[0]}")
-    elif num_cols:
-        suggestions.append(f"What is the total {num_cols[0]}?")
-        suggestions.append(f"What is the average {num_cols[0]}?")
-
-    if num_cols and date_cols:
-        suggestions.append(f"Show {num_cols[0]} trend by month")
-
-    if cat_cols:
-        suggestions.append(f"How many records by {cat_cols[0]}?")
-
-    suggestions.append("Give me a summary of the dataset")
-    return {"success": True, "suggestions": suggestions[:5]}
