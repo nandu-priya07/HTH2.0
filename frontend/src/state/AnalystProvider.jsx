@@ -20,29 +20,6 @@ import { getDatasetStats } from '../lib/dataset'
 const normalizeVis = (item) =>
   item?.visualization_type === 'decision_boundary' ? { ...item, visualization_type: 'line' } : item
 
-// Maps an /api/query response to ChatMessage props.
-const buildAiMessage = (data, question) => ({
-  sender: 'ai',
-  question,
-  text: data.text,
-  status: data.status,
-  result_type: data.result_type || data.type,
-  decision_analysis: data.decision_analysis,
-  scalar: data.scalar,
-  table: data.table,
-  options: data.options,
-  intent: data.intent,
-  query_spec: data.query_spec || data.query,
-  visualization: normalizeVis(data.visualization),
-  visualizations: data.visualizations?.map(normalizeVis),
-  metadata: data.metadata,
-  derived_metric: data.derived_metric,
-  calculation_steps: data.calculation_steps,
-  available_fields: data.available_fields,
-  suggestion: data.suggestion,
-  error: data.error
-})
-
 // Helper to format backend messages into ChatMessage props
 const formatApiMessage = (msg) => {
   const isAi = msg.role === 'assistant' || msg.role === 'system'
@@ -55,18 +32,15 @@ const formatApiMessage = (msg) => {
     text: msg.content,
     result: msg.result,
     decision_analysis: res.decision_analysis,
+    geo: res.geo,
+    geo_result: res.result?.result || (res.analysis_type === 'geographic_analysis' ? res.result : null),
+    geo_evidence: res.evidence,
     table: res.table || (res.tables && res.tables[0]),
     tables: res.tables,
     scalar: res.scalar || (res.scalars && res.scalars[0]),
     scalars: res.scalars,
     list: res.list,
     metadata: res.metadata,
-    status: res.status,
-    options: res.options,
-    derived_metric: res.derived_metric,
-    calculation_steps: res.calculation_steps,
-    available_fields: res.available_fields,
-    suggestion: res.suggestion,
     query_spec: msg.query_spec,
     intent: msg.intent,
     visualization: Array.isArray(vis) ? vis[0] : normalizeVis(vis),
@@ -228,7 +202,7 @@ export default function AnalystProvider({ children }) {
     const cleanText = (textToSend ?? '').trim()
     if (!cleanText) return
 
-    setMessages((prev) => [...prev, { sender: 'user', text: cleanText, id: `user-${Date.now()}` }])
+    setMessages((prev) => [...prev, { sender: 'user', text: cleanText }])
     setInput('')
     setIsLoading(true)
     setUploadError(null)
@@ -266,7 +240,26 @@ export default function AnalystProvider({ children }) {
 
       setMessages((prev) => [
         ...prev,
-        buildAiMessage(data, cleanText)
+        {
+          sender: 'ai',
+          question: cleanText,
+          text: data.text,
+          status: data.status,
+          result_type: data.result_type || data.type,
+          decision_analysis: data.decision_analysis,
+          geo: data.geo,
+          geo_result: data.result,
+          geo_evidence: data.evidence,
+          scalar: data.scalar,
+          table: data.table,
+          options: data.options,
+          intent: data.intent,
+          query_spec: data.query_spec || data.query,
+          visualization: normalizeVis(data.visualization),
+          visualizations: data.visualizations?.map(normalizeVis),
+          metadata: data.metadata,
+          error: data.error
+        }
       ])
     } catch {
       setMessages((prev) => [
@@ -282,79 +275,6 @@ export default function AnalystProvider({ children }) {
       setIsLoading(false)
     }
   }, [fetchConversations, loadDataset])
-
-  const editAndSendMessage = useCallback(async (messageIndex, newText) => {
-    const cleanText = (newText ?? '').trim()
-    if (!cleanText) return
-
-    const originalMsg = messages[messageIndex]
-    const updatedUserMsg = {
-      ...(originalMsg || {}),
-      sender: 'user',
-      text: cleanText,
-      id: originalMsg?.id || `user-${Date.now()}`
-    }
-
-    // Branch conversation: keep prior messages, replace this message, drop all downstream messages
-    const priorMessages = messages.slice(0, messageIndex)
-    setMessages([...priorMessages, updatedUserMsg])
-    setIsLoading(true)
-    setUploadError(null)
-
-    try {
-      const response = await fetch('/api/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question: cleanText,
-          dataset_id: datasetRef.current?.dataset_id || null,
-          conversation_id: conversationIdRef.current || null
-        })
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            sender: 'ai',
-            question: cleanText,
-            errorKind: 'server',
-            error: data.error || data.detail || 'Server returned an error processing your query.'
-          }
-        ])
-        return
-      }
-
-      if (data.conversation_id) {
-        setActiveConversationId(data.conversation_id)
-        conversationIdRef.current = data.conversation_id
-        fetchConversations()
-      }
-
-      if (data.dataset_id && (!datasetRef.current || datasetRef.current.dataset_id !== data.dataset_id)) {
-        await loadDataset(data.dataset_id)
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        buildAiMessage(data, cleanText)
-      ])
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: 'ai',
-          question: cleanText,
-          errorKind: 'connection',
-          error: 'Failed to connect to backend analytics engine. Please ensure the backend server is running on port 8000.'
-        }
-      ])
-    } finally {
-      setIsLoading(false)
-    }
-  }, [messages, fetchConversations, loadDataset])
 
   /**
    * Upload a dataset via POST /api/upload.
@@ -442,12 +362,12 @@ export default function AnalystProvider({ children }) {
     activeDataset, suggestions,
     conversations, activeConversationId, isLoadingConversations, conversationsError,
     fetchConversations, selectConversation, newChat, renameConversation, deleteConversation,
-    sendMessage, editAndSendMessage, sendFile, uploadDataset, clearDataset
+    sendMessage, sendFile, uploadDataset, clearDataset
   }), [
     messages, input, isLoading, isLoadingMessages, uploadError, activeDataset, suggestions,
     conversations, activeConversationId, isLoadingConversations, conversationsError,
     fetchConversations, selectConversation, newChat, renameConversation, deleteConversation,
-    sendMessage, editAndSendMessage, sendFile, uploadDataset, clearDataset
+    sendMessage, sendFile, uploadDataset, clearDataset
   ])
 
   return <AnalystContext.Provider value={value}>{children}</AnalystContext.Provider>

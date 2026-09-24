@@ -19,6 +19,7 @@ import ExplanationTrace from '../analytics/ExplanationTrace'
 import EvidencePanel from '../analytics/EvidencePanel'
 import { buildExplanation } from '../../lib/explain'
 import { formatBytes } from '../../lib/dataset'
+import GeoDecisionExplorer from '../analytics/GeoDecisionExplorer'
 
 /* Renders plain text with **bold** spans and paragraph breaks. */
 function RichText({ text }) {
@@ -332,6 +333,9 @@ export default function ChatMessage({
     error,
     errorKind,
     decision_analysis,
+    geo,
+    geo_result,
+    geo_evidence,
     kind
   } = message
 
@@ -408,6 +412,8 @@ export default function ChatMessage({
             )}
 
             {decision_analysis && <DecisionAnalysis decision_analysis={decision_analysis} />}
+
+            {geo && <GeoDecisionExplorer geo={geo} result={geo_result} evidence={geo_evidence} />}
 
             {hasVis && (
               <div className="answer-block answer-chart">
