@@ -1,4 +1,3 @@
-import React from 'react'
 import {
   ResponsiveContainer,
   PieChart as RechartsPie,
@@ -7,7 +6,7 @@ import {
   Tooltip,
   Legend
 } from 'recharts'
-import { CHART_COLORS, formatValue, truncateLabel, formatColumnHeader } from './formatters'
+import { CHART_COLORS, OTHER_COLOR, foldToOther, formatValue, truncateLabel } from './formatters'
 
 const CustomTooltip = ({ active, payload, format, totalSum }) => {
   if (active && payload && payload.length) {
@@ -19,7 +18,7 @@ const CustomTooltip = ({ active, payload, format, totalSum }) => {
       <div className="vis-tooltip-card">
         <div className="vis-tooltip-label">{item.name}</div>
         <div className="vis-tooltip-row">
-          <span className="vis-tooltip-bullet" style={{ background: item.payload?.fill || '#6366F1' }} />
+          <span className="vis-tooltip-bullet" style={{ background: item.payload?.fill || CHART_COLORS[0] }} />
           <span className="vis-tooltip-name">Value:</span>
           <span className="vis-tooltip-val">{formatValue(val, format)}</span>
         </div>
@@ -50,7 +49,8 @@ export default function PieChartComponent({
     return null
   }
 
-  const totalSum = data.reduce((acc, curr) => acc + (Number(curr[vKey]) || 0), 0)
+  const chartData = foldToOther(data, lKey, vKey)
+  const totalSum = chartData.reduce((acc, curr) => acc + (Number(curr[vKey]) || 0), 0)
 
   return (
     <div className="vis-chart-card animate-fade-in">
@@ -65,19 +65,19 @@ export default function PieChartComponent({
         <ResponsiveContainer width="100%" height="100%">
           <RechartsPie>
             <Pie
-              data={data}
+              data={chartData}
               dataKey={vKey}
               nameKey={lKey}
               cx="50%"
               cy="48%"
               innerRadius={55}
               outerRadius={88}
-              paddingAngle={4}
+              paddingAngle={1}
             >
-              {data.map((_, index) => (
+              {chartData.map((row, index) => (
                 <Cell
                   key={`cell-${index}`}
-                  fill={CHART_COLORS[index % CHART_COLORS.length]}
+                  fill={row.__other ? OTHER_COLOR : CHART_COLORS[index]}
                   stroke="#fff"
                   strokeWidth={2}
                 />
@@ -88,7 +88,7 @@ export default function PieChartComponent({
               verticalAlign="bottom"
               height={36}
               formatter={(value) => (
-                <span style={{ color: '#4B5563', fontSize: '12px', fontWeight: 500 }}>
+                <span style={{ color: '#102F35', fontSize: '12px', fontWeight: 500 }}>
                   {truncateLabel(value, 15)}
                 </span>
               )}

@@ -1,14 +1,12 @@
-import React from 'react'
 import { formatValue } from './formatters'
-import { SparklesIcon } from '../Icons'
+import { SparklesIcon } from '../ui/Icons'
 
 export default function MetricCard({
   title,
   value,
   format = 'number',
   description,
-  aggregation,
-  value_key
+  aggregation
 }) {
   const displayVal = formatValue(value, format)
   const isCurrency = format === 'currency'

@@ -1,151 +1,67 @@
-import { SparklesIcon, BarChartIcon, TrendingUpIcon, TableIcon, DatabaseIcon } from './Icons'
+import { SparklesIcon, BarChartIcon, TrendingUpIcon, ListIcon, AlertTriangleIcon, ArrowRightIcon, UploadIcon, DatabaseIcon } from '../ui/Icons'
+import { Link } from '../ui/primitives'
+import { getDatasetStats, formatCount } from '../../lib/dataset'
 
-/* Arrow icon inline — simple chevron right */
-function ArrowRight() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
-    </svg>
-  )
-}
-
-/* Card configurations — each has a color variant and icon color */
+/* Default question templates. When the backend returns dataset-specific
+   suggestions (GET /api/dataset/:id/suggestions) they replace these in order. */
 const CARD_CONFIGS = [
-  {
-    variant: 'variant-purple',
-    iconColor: 'purple',
-    icon: <BarChartIcon size={18} />,
-    category: 'Ranking',
-    defaultTitle: 'Top products',
-    defaultText: 'What are the top 5 products by revenue?'
-  },
-  {
-    variant: 'variant-blue',
-    iconColor: 'blue',
-    icon: <TrendingUpIcon size={18} />,
-    category: 'Trend',
-    defaultTitle: 'Sales trends',
-    defaultText: 'Show me the monthly sales trend'
-  },
-  {
-    variant: 'variant-cyan',
-    iconColor: 'cyan',
-    icon: <TableIcon size={18} />,
-    category: 'Breakdown',
-    defaultTitle: 'Regional breakdown',
-    defaultText: 'What is the total sales by region?'
-  },
-  {
-    variant: 'variant-pink',
-    iconColor: 'pink',
-    icon: <SparklesIcon size={18} />,
-    category: 'Analysis',
-    defaultTitle: 'Profit analysis',
-    defaultText: 'What is the average profit by category?'
-  }
+  { icon: BarChartIcon, category: 'Ranking', defaultText: 'Which region generated the highest revenue?' },
+  { icon: TrendingUpIcon, category: 'Trend', defaultText: 'Show monthly sales trends.' },
+  { icon: ListIcon, category: 'Top-N', defaultText: 'What are the top 5 products?' },
+  { icon: SparklesIcon, category: 'Comparison', defaultText: 'Compare revenue across regions.' },
+  { icon: AlertTriangleIcon, category: 'Anomaly', defaultText: 'Are there unusual transactions?' }
 ]
 
 export default function SuggestedQuestions({ onSelectSuggestion, activeDataset, suggestions = [] }) {
-  const datasetName = activeDataset?.filename || activeDataset?.result?.metadata?.filename
-  const rowCount    = activeDataset?.metadata?.rows || activeDataset?.result?.metadata?.rows || activeDataset?.rows
+  const stats = getDatasetStats(activeDataset)
+  const fromDataset = suggestions.length > 0
 
-  /* Build final cards — use backend suggestions text if available */
-  const cards = CARD_CONFIGS.map((cfg, i) => ({
-    ...cfg,
-    text: suggestions[i] || cfg.defaultText
-  }))
+  const cards = CARD_CONFIGS.map((cfg, i) => ({ ...cfg, text: suggestions[i] || cfg.defaultText }))
 
   return (
-    <div className="empty-chat-container animate-fade-in">
-
-      {/* Floating brand orb */}
-      <div className="empty-brand-badge" aria-hidden="true">
-        <div className="brand-glow-ring" />
-        <SparklesIcon size={30} />
-      </div>
-
-      {/* Eyebrow */}
-      <div className="empty-eyebrow">
-        <span className="eyebrow-dot" />
-        AI Data Analyst
-        <span className="eyebrow-dot" />
-      </div>
-
-      {/* Main heading */}
-      <h1 className="empty-title">
-        Turn data into <span className="title-gradient">intelligence</span>
+    <div className="ask-empty animate-fade-in">
+      <div className="ask-empty-badge" aria-hidden="true"><SparklesIcon size={24} /></div>
+      <h1 className="ask-empty-title">
+        {stats ? <>Ask anything about <span className="text-accent">{stats.name}</span></> : <>Ask your data <span className="text-accent">anything</span></>}
       </h1>
-
-      <p className="empty-subtitle">
-        Ask questions about your data in plain English. HTH2.0 analyzes it,
-        finds patterns, and delivers precise insights — instantly.
+      <p className="ask-empty-sub">
+        Get an answer, a chart chosen for the question, and a step-by-step explanation of how it was calculated.
       </p>
 
-      {/* Dataset status pill */}
-      {activeDataset ? (
-        <div className="active-dataset-hero-pill">
-          <DatabaseIcon size={15} />
-          <span className="dataset-hero-name">{datasetName}</span>
-          {rowCount && <span className="dataset-hero-meta">· {rowCount.toLocaleString()} rows</span>}
-          <span className="dataset-status-badge">● Ready</span>
+      {stats ? (
+        <div className="ask-empty-dataset">
+          <DatabaseIcon size={14} />
+          <span className="mono">{stats.name}</span>
+          <span>· {formatCount(stats.rows)} rows · {formatCount(stats.columns)} columns</span>
+          <span className="status status-good">Ready</span>
         </div>
       ) : (
-        <div className="no-dataset-hero-pill">
-          <DatabaseIcon size={15} />
-          <span>No dataset loaded · Upload a CSV or Excel file below to begin</span>
+        <div className="ask-empty-nodata">
+          <span>No dataset connected yet.</span>
+          <Link to="/upload" className="btn btn-primary btn-sm"><UploadIcon size={14} /> Upload dataset</Link>
+          <span className="muted">or attach one with <strong>+</strong> below</span>
         </div>
       )}
 
-      {/* Feature capability badges */}
-      <div className="features-ribbon">
-        <div className="feature-pill">
-          <span className="feature-dot emerald" />
-          Reliable Analysis
+      <div className="suggestions">
+        <div className="suggestions-head">
+          <span className="section-label">Try asking</span>
+          <span className="suggestions-source">{fromDataset ? 'Generated from your schema' : 'Example questions'}</span>
         </div>
-        <div className="feature-pill">
-          <span className="feature-dot indigo" />
-          Schema-Agnostic
-        </div>
-        <div className="feature-pill">
-          <span className="feature-dot cyan" />
-          Instant Aggregations
-        </div>
-      </div>
-
-      {/* Suggestion cards grid */}
-      <div className="suggestions-section">
-        <div className="suggestions-header">
-          <span className="suggestions-title">Try asking</span>
-          <span className="suggestions-hint">Click any card to analyze</span>
-        </div>
-
-        <div className="suggestions-grid">
-          {cards.map((card, idx) => (
-            <button
-              key={idx}
-              className={`suggestion-card ${card.variant}`}
-              onClick={() => onSelectSuggestion(card.text)}
-              title={card.text}
-            >
-              <div className="suggestion-card-top">
-                <div className={`suggestion-icon-wrap ${card.iconColor}`}>
-                  {card.icon}
-                </div>
-                <span className="suggestion-cat-badge">{card.category}</span>
-              </div>
-
-              <div className="suggestion-body">
-                <div className="suggestion-card-title">{card.defaultTitle}</div>
-                <div className="suggestion-text">{card.text}</div>
-              </div>
-
-              <div className="suggestion-arrow">
-                <ArrowRight />
-              </div>
-            </button>
+        <ul className="suggestions-list">
+          {cards.map(({ icon: Icon, category, text }) => (
+            <li key={category}>
+              <button className="suggestion" onClick={() => onSelectSuggestion(text)}>
+                <span className="suggestion-icon"><Icon size={16} /></span>
+                <span className="suggestion-body">
+                  <span className="suggestion-cat">{category}</span>
+                  <span className="suggestion-text">{text}</span>
+                </span>
+                <ArrowRightIcon size={16} className="suggestion-arrow" />
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
     </div>
   )

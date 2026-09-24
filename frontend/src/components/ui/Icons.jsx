@@ -264,3 +264,32 @@ export function MessageSquareIcon({ size = 18, className = "" }) {
 }
 
 
+/* ── Product shell / page icons ── */
+
+function IconBase({ size = 18, className = "", children }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...iconDefaults} className={className} aria-hidden="true">
+      {children}
+    </svg>
+  )
+}
+
+export function ArrowRightIcon(props) { return <IconBase {...props}><><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></></IconBase> }
+export function ArrowDownIcon(props) { return <IconBase {...props}><><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></></IconBase> }
+export function ChevronDownIcon(props) { return <IconBase {...props}><path d="m6 9 6 6 6-6"/></IconBase> }
+export function ChevronRightIcon(props) { return <IconBase {...props}><path d="m9 18 6-6-6-6"/></IconBase> }
+export function UploadIcon(props) { return <IconBase {...props}><><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></></IconBase> }
+export function HomeIcon(props) { return <IconBase {...props}><><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></></IconBase> }
+export function GlobeIcon(props) { return <IconBase {...props}><><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></></IconBase> }
+export function LightbulbIcon(props) { return <IconBase {...props}><><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></></IconBase> }
+export function TargetIcon(props) { return <IconBase {...props}><><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></></IconBase> }
+export function ClockIcon(props) { return <IconBase {...props}><><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></></IconBase> }
+export function SlidersIcon(props) { return <IconBase {...props}><><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/></></IconBase> }
+export function SearchIcon(props) { return <IconBase {...props}><><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></></IconBase> }
+export function FilterIcon(props) { return <IconBase {...props}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></IconBase> }
+export function ShieldCheckIcon(props) { return <IconBase {...props}><><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></></IconBase> }
+export function ListIcon(props) { return <IconBase {...props}><><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></></IconBase> }
+export function AlertTriangleIcon(props) { return <IconBase {...props}><><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></></IconBase> }
+export function CornerDownRightIcon(props) { return <IconBase {...props}><><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></></IconBase> }
+export function FileSpreadsheetIcon(props) { return <IconBase {...props}><><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></></IconBase> }
+export function GitBranchIcon(props) { return <IconBase {...props}><><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></></IconBase> }

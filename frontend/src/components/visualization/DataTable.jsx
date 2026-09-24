@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { TableIcon, CopyIcon } from '../Icons'
+import { useState } from 'react'
+import { TableIcon, CopyIcon } from '../ui/Icons'
 import { formatValue, formatColumnHeader } from './formatters'
 
 export default function DataTable({

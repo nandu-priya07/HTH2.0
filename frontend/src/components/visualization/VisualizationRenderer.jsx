@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import MetricCard from './MetricCard'
 import BarChartComponent from './BarChart'
 import LineChartComponent from './LineChart'
@@ -10,8 +10,9 @@ import {
   PieChartIcon,
   LineChartIcon,
   TableIcon,
-  SparklesIcon
-} from '../Icons'
+  SparklesIcon,
+  GlobeIcon
+} from '../ui/Icons'
 
 function getChartIcon(type, size = 14) {
   switch (type) {
@@ -19,9 +20,13 @@ function getChartIcon(type, size = 14) {
     case 'horizontal_bar':
       return <BarChartIcon size={size} />
     case 'pie':
+    case 'donut':
       return <PieChartIcon size={size} />
     case 'line':
+    case 'area':
       return <LineChartIcon size={size} />
+    case 'map':
+      return <GlobeIcon size={size} />
     case 'table':
       return <TableIcon size={size} />
     default:
@@ -39,6 +44,12 @@ function getChartLabel(type) {
       return 'Pie Chart'
     case 'line':
       return 'Line Chart'
+    case 'area':
+      return 'Area Chart'
+    case 'donut':
+      return 'Donut Chart'
+    case 'map':
+      return 'Map'
     case 'scatter':
       return 'Scatter Plot'
     case 'table':
@@ -104,8 +115,7 @@ function SingleVisualization({ vis, showTableToggle = true }) {
 
   const hasData = vis.data && vis.data.length > 0
   const hasTable = vis.rows && vis.rows.length > 0
-  const isChart = ['bar', 'horizontal_bar', 'line', 'pie', 'scatter'].includes(activeType)
-
+  
   // Handlers for dimension & metric keys across different chart types
   const dimKey = vis.x_key || vis.label_key || (vis.headers && vis.headers[0]) || 'column'
   const valKey = vis.y_key || vis.value_key || (vis.headers && vis.headers[1]) || 'count'
@@ -133,6 +143,7 @@ function SingleVisualization({ vis, showTableToggle = true }) {
           />
         )
       case 'line':
+      case 'area':
         return (
           <LineChartComponent
             {...vis}
@@ -141,6 +152,7 @@ function SingleVisualization({ vis, showTableToggle = true }) {
           />
         )
       case 'pie':
+      case 'donut':
         return (
           <PieChartComponent
             {...vis}
@@ -155,6 +167,16 @@ function SingleVisualization({ vis, showTableToggle = true }) {
             x_key={dimKey}
             y_key={valKey}
           />
+        )
+      case 'map':
+        return (
+          <div className="vis-chart-card vis-map-placeholder">
+            <GlobeIcon size={20} />
+            <div>
+              <div className="vis-chart-title">{vis.title || 'Map view'}</div>
+              <div className="vis-chart-desc">Geographic rendering is not available for this result yet. Switch to the data table to see the values.</div>
+            </div>
+          </div>
         )
       case 'table':
         return (

@@ -6,7 +6,8 @@ import {
   CloseIcon,
   AlertCircleIcon,
   PlusIcon
-} from './Icons'
+} from '../ui/Icons'
+import { formatBytes } from '../../lib/dataset'
 
 export default function ChatInput({
   input,
@@ -15,39 +16,31 @@ export default function ChatInput({
   onSendFile,
   isLoading,
   uploadError,
-  setUploadError
+  setUploadError,
+  inputRef,
+  hasContext = false
 }) {
   const [selectedFile, setSelectedFile] = useState(null)
   const [showTooltip, setShowTooltip] = useState('')
   const fileInputRef = useRef(null)
   const textareaRef = useRef(null)
 
+  // Expose the textarea to parents (e.g. "Ask another question" focuses it)
+  useEffect(() => {
+    if (inputRef) inputRef.current = textareaRef.current
+  }, [inputRef])
+
   // Auto-resize textarea height
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = '42px'
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 140)}px`
+      textareaRef.current.style.height = '48px'
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`
     }
   }, [input])
 
-  const formatFileSize = (bytes) => {
-    if (!bytes) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
-  }
-
-  const handleFileClick = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click()
-    }
-  }
-
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0]
-      setSelectedFile(file)
+      setSelectedFile(e.target.files[0])
       if (setUploadError) setUploadError(null)
     }
     e.target.value = ''
@@ -66,7 +59,6 @@ export default function ChatInput({
   const handleSubmit = (e) => {
     e?.preventDefault()
     if (isLoading) return
-
     if (selectedFile) {
       onSendFile(selectedFile, input.trim())
       setSelectedFile(null)
@@ -85,119 +77,91 @@ export default function ChatInput({
   const isSendDisabled = (!input.trim() && !selectedFile) || isLoading
 
   return (
-    <div className="chat-input-sticky">
-      {/* Hidden File Picker */}
+    <div className="composer-wrap">
       <input
         ref={fileInputRef}
         type="file"
         accept=".csv, .xlsx, .xls"
-        style={{ display: 'none' }}
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
         onChange={handleFileChange}
       />
 
-      <div className="input-box-card">
-        {/* Tooltip Popup */}
-        {showTooltip && (
-          <div className="tooltip-popup">
-            <span>{showTooltip}</span>
-          </div>
-        )}
+      <form className="composer" onSubmit={handleSubmit}>
+        {showTooltip && <div className="composer-tooltip" role="status">{showTooltip}</div>}
 
-        {/* Error Banner */}
         {uploadError && (
-          <div className="upload-error-banner animate-fade-in">
-            <div className="error-banner-content">
-              <AlertCircleIcon size={16} />
-              <span>{uploadError}</span>
-            </div>
-            <button className="error-close-btn" onClick={() => setUploadError(null)}>
+          <div className="composer-error animate-fade-in" role="alert">
+            <AlertCircleIcon size={16} />
+            <span>{uploadError}</span>
+            <button type="button" className="icon-btn icon-btn-sm" onClick={() => setUploadError(null)} aria-label="Dismiss error">
               <CloseIcon size={14} />
             </button>
           </div>
         )}
 
-        {/* Selected File Attachment Card Preview */}
         {selectedFile && (
-          <div className="file-attachment-preview animate-fade-in">
-            <div className="attachment-icon-badge">
-              <PaperclipIcon size={15} />
-            </div>
-            <div className="attachment-details">
-              <div className="attachment-name">{selectedFile.name}</div>
-              <div className="attachment-size">{formatFileSize(selectedFile.size)}</div>
-            </div>
-            <button
-              type="button"
-              className="remove-attachment-btn"
-              onClick={handleRemoveFile}
-              disabled={isLoading}
-              title="Remove file"
-            >
+          <div className="composer-file animate-fade-in">
+            <PaperclipIcon size={15} />
+            <span className="composer-file-name">{selectedFile.name}</span>
+            <span className="composer-file-size">{formatBytes(selectedFile.size)}</span>
+            <button type="button" className="icon-btn icon-btn-sm" onClick={handleRemoveFile} disabled={isLoading} aria-label="Remove file">
               <CloseIcon size={13} />
             </button>
           </div>
         )}
 
-        {/* Composer Controls Row */}
         <div className="composer-row">
-          {/* File Attach Button */}
           <button
             type="button"
-            className={`input-action-btn ${selectedFile ? 'has-file' : ''}`}
-            onClick={handleFileClick}
+            className={`icon-btn composer-attach${selectedFile ? ' has-file' : ''}`}
+            onClick={() => fileInputRef.current?.click()}
             disabled={isLoading}
             title="Attach CSV or Excel dataset"
+            aria-label="Attach CSV or Excel dataset"
           >
             <PlusIcon size={18} />
           </button>
 
-          {/* Textarea Input */}
+          <label htmlFor="ask-input" className="sr-only">Ask a question about your dataset</label>
           <textarea
+            id="ask-input"
             ref={textareaRef}
-            className="chat-textarea"
+            className="composer-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
               selectedFile
-                ? "Attach this dataset and ask a question... (or send directly)"
-                : "Ask anything about your data in plain English..."
+                ? 'Attach this dataset and ask a question… (or send directly)'
+                : hasContext
+                  ? 'Ask a follow-up — e.g. “What about the second highest?”'
+                  : 'Ask anything about your dataset...'
             }
             rows={1}
             disabled={isLoading}
           />
 
-          {/* Voice Input Button */}
           <button
             type="button"
-            className="input-action-btn"
+            className="icon-btn"
             onClick={() => triggerTooltip('Voice query input coming soon')}
             disabled={isLoading}
+            aria-label="Voice input (coming soon)"
             title="Voice input"
           >
             <MicIcon size={17} />
           </button>
 
-          {/* Send Button */}
-          <button
-            type="button"
-            className="send-btn-primary"
-            onClick={handleSubmit}
-            disabled={isSendDisabled}
-            title="Send query (Enter)"
-          >
-            {isLoading ? (
-              <span className="btn-spinner"></span>
-            ) : (
-              <SendIcon size={16} />
-            )}
+          <button type="submit" className="composer-send" disabled={isSendDisabled} aria-label="Send question" title="Send (Enter)">
+            {isLoading ? <span className="spinner" /> : <SendIcon size={16} />}
           </button>
         </div>
-
-        {/* Footer Shortcut Helper */}
-        <div className="input-footer-hint">
-          <span>Enter to submit • Shift + Enter for new line • CSV / Excel supported</span>
-        </div>
+      </form>
+      <div className="composer-hint">
+        <span><kbd>Enter</kbd> to ask · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
+        {hasContext && <span className="composer-context">Follow-up questions use this conversation's context</span>}
       </div>
     </div>
   )

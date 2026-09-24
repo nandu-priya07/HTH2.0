@@ -1,4 +1,3 @@
-import React from 'react'
 import {
   ResponsiveContainer,
   BarChart as RechartsBar,
@@ -7,9 +6,9 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Cell
+  LabelList
 } from 'recharts'
-import { CHART_COLORS, formatValue, formatAxisNumber, truncateLabel, formatColumnHeader } from './formatters'
+import { PRIMARY_SERIES, AXIS_TICK, AXIS_LINE, GRID_STROKE, formatValue, formatAxisNumber, truncateLabel, formatColumnHeader } from './formatters'
 
 const CustomTooltip = ({ active, payload, label, format, xKey, yKey, isHorizontal }) => {
   if (active && payload && payload.length) {
@@ -21,7 +20,7 @@ const CustomTooltip = ({ active, payload, label, format, xKey, yKey, isHorizonta
       <div className="vis-tooltip-card">
         <div className="vis-tooltip-label">{titleLabel}</div>
         <div className="vis-tooltip-row">
-          <span className="vis-tooltip-bullet" style={{ background: item.color || '#6366F1' }} />
+          <span className="vis-tooltip-bullet" style={{ background: PRIMARY_SERIES }} />
           <span className="vis-tooltip-name">{formatColumnHeader(yKey)}:</span>
           <span className="vis-tooltip-val">{formatValue(val, format)}</span>
         </div>
@@ -62,35 +61,33 @@ export default function BarChartComponent({
             <RechartsBar
               data={data}
               layout="vertical"
-              margin={{ top: 10, right: 24, left: 10, bottom: 10 }}
+              margin={{ top: 10, right: 64, left: 10, bottom: 10 }}
             >
-              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(229, 231, 235, 0.6)" />
+              <CartesianGrid horizontal={false} stroke={GRID_STROKE} />
               <XAxis
                 type="number"
                 tickFormatter={formatAxisNumber}
-                tick={{ fill: '#6B7280', fontSize: 12 }}
-                axisLine={{ stroke: '#E5E7EB' }}
+                tick={AXIS_TICK}
+                axisLine={AXIS_LINE}
                 tickLine={false}
               />
               <YAxis
                 type="category"
                 dataKey={x_key}
                 tickFormatter={(val) => truncateLabel(val, 16)}
-                tick={{ fill: '#4B5563', fontSize: 12, fontWeight: 500 }}
-                axisLine={{ stroke: '#E5E7EB' }}
+                tick={{ ...AXIS_TICK, fill: '#102F35', fontWeight: 500 }}
+                axisLine={AXIS_LINE}
                 tickLine={false}
                 width={110}
               />
               <Tooltip
+                cursor={{ fill: 'rgba(9, 124, 135, 0.06)' }}
                 content={<CustomTooltip format={format} xKey={x_key} yKey={y_key} isHorizontal={true} />}
               />
-              <Bar dataKey={y_key} radius={[0, 6, 6, 0]} maxBarSize={28}>
-                {data.map((_, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={CHART_COLORS[index % CHART_COLORS.length]}
-                  />
-                ))}
+              <Bar dataKey={y_key} fill={PRIMARY_SERIES} radius={[0, 4, 4, 0]} maxBarSize={24}>
+                {data.length <= 12 && (
+                  <LabelList dataKey={y_key} position="right" formatter={(v) => formatValue(v, format)} style={{ fill: '#557177', fontSize: 11.5 }} />
+                )}
               </Bar>
             </RechartsBar>
           ) : (
@@ -99,12 +96,12 @@ export default function BarChartComponent({
               layout="horizontal"
               margin={{ top: 10, right: 16, left: -10, bottom: 20 }}
             >
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(229, 231, 235, 0.6)" />
+              <CartesianGrid vertical={false} stroke={GRID_STROKE} />
               <XAxis
                 dataKey={x_key}
                 tickFormatter={(val) => truncateLabel(val, 14)}
-                tick={{ fill: '#6B7280', fontSize: 12 }}
-                axisLine={{ stroke: '#E5E7EB' }}
+                tick={AXIS_TICK}
+                axisLine={AXIS_LINE}
                 tickLine={false}
                 interval={0}
                 angle={data.length > 5 ? -25 : 0}
@@ -113,21 +110,15 @@ export default function BarChartComponent({
               />
               <YAxis
                 tickFormatter={formatAxisNumber}
-                tick={{ fill: '#6B7280', fontSize: 12 }}
-                axisLine={{ stroke: '#E5E7EB' }}
+                tick={AXIS_TICK}
+                axisLine={AXIS_LINE}
                 tickLine={false}
               />
               <Tooltip
+                cursor={{ fill: 'rgba(9, 124, 135, 0.06)' }}
                 content={<CustomTooltip format={format} xKey={x_key} yKey={y_key} isHorizontal={false} />}
               />
-              <Bar dataKey={y_key} radius={[6, 6, 0, 0]} maxBarSize={42}>
-                {data.map((_, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={CHART_COLORS[index % CHART_COLORS.length]}
-                  />
-                ))}
-              </Bar>
+              <Bar dataKey={y_key} fill={PRIMARY_SERIES} radius={[4, 4, 0, 0]} maxBarSize={40} />
             </RechartsBar>
           )}
         </ResponsiveContainer>
