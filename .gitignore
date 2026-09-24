@@ -1,4 +1,6 @@
 backend/.venv/
+backend/uploads/processed/
+backend/uploads/raw/
 __pycache__/
 *.pyc
 
@@ -18,4 +20,4 @@ backend/data/*.db-shm
 backend/data/*.db-journal
 
 .vscode/
-.idea/
+.idea/
