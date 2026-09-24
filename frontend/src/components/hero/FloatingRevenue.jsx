@@ -14,25 +14,28 @@ export default function FloatingRevenue({ style, isHighlighted = false }) {
       style={style}
     >
       <div className="fc-stage-tag stage-analysis">ANALYSIS</div>
-      <div className="fc-label">Total Revenue</div>
+      <div className="fc-label">
+        <span className="fc-node-dot dot-cyan" aria-hidden="true" />
+        <span>Total Revenue</span>
+      </div>
       <div className="fc-value">$12.8M</div>
       <div className="fc-delta up">
         <TrendingUpIcon size={12} />
-        <span>12.9% vs last period</span>
+        <span>12.3% vs last period</span>
       </div>
 
-      {/* Animated SVG Sparkline */}
+      {/* Animated SVG Sparkline — video-derived emerald trend */}
       <div className="fc-sparkline-wrap" aria-hidden="true">
         <svg viewBox="0 0 134 32" className="fc-sparkline-svg">
           <defs>
             <linearGradient id="revAreaGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#23CED9" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="#23CED9" stopOpacity="0.0" />
+              <stop offset="0%" stopColor="#10b981" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.0" />
             </linearGradient>
-            {/* Analysis accent: teal into cyan */}
+            {/* Trend accent: emerald into glowing cyan */}
             <linearGradient id="revStrokeGrad" x1="0" y1="0" x2="100%" y2="0">
-              <stop offset="0%" stopColor="#097C87" />
-              <stop offset="100%" stopColor="#23CED9" />
+              <stop offset="0%" stopColor="#059669" />
+              <stop offset="100%" stopColor="#10b981" />
             </linearGradient>
           </defs>
           {/* Shaded area */}
@@ -50,8 +53,8 @@ export default function FloatingRevenue({ style, isHighlighted = false }) {
             strokeLinejoin="round"
             className="fc-sparkline-line"
           />
-          {/* Latest value = the discovery point (warm yellow) */}
-          <circle cx="130" cy="3" r="3.5" fill="#F9D779" stroke="#FFFFFF" strokeWidth="1.5" className="fc-spark-point" />
+          {/* Latest value point */}
+          <circle cx="130" cy="3" r="3.5" fill="#10b981" stroke="#FFFFFF" strokeWidth="1.5" className="fc-spark-point" />
         </svg>
       </div>
     </div>

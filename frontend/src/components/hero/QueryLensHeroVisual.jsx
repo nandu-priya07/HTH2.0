@@ -111,10 +111,10 @@ export default function QueryLensHeroVisual({ hoveredCta = null }) {
       <div className="hero-depth-layer layer-nodes" style={{ transform: nodesTransform }}>
         <DataConnections />
         <GlobeMarker x="40%" y="46%" label="West Region" />
-        {/* Node tones carry meaning: cyan = data in analysis, teal = core, yellow = a discovery */}
+        {/* Video data nodes: cyan = analytical streams, blue = continent nodes, pin = geographic marker, ice = white-hot burst */}
         <DataNode x="22%" y="38%" tone="cyan" delay="0.4s" />
-        <DataNode x="72%" y="34%" tone="teal" delay="1.1s" />
-        <DataNode x="64%" y="62%" tone="yellow" delay="1.8s" />
+        <DataNode x="72%" y="34%" tone="blue" delay="1.1s" />
+        <DataNode x="64%" y="62%" tone="pin" delay="1.8s" />
         <DataNode x="30%" y="68%" tone="cyan" delay="1.5s" />
       </div>
 

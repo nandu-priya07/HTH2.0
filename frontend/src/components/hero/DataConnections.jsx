@@ -20,15 +20,15 @@ export default function DataConnections() {
       }}
     >
       <defs>
-        {/* Analysis links: cyan fading into deep teal */}
+        {/* Video data arcs: glowing cyan fading into continent cobalt / orchid */}
         <linearGradient id="connGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#23CED9" stopOpacity="0.85" />
-          <stop offset="100%" stopColor="#097C87" stopOpacity="0.35" />
+          <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.85" />
+          <stop offset="100%" stopColor="#2563eb" stopOpacity="0.35" />
         </linearGradient>
 
         <linearGradient id="connGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#097C87" stopOpacity="0.7" />
-          <stop offset="100%" stopColor="#23CED9" stopOpacity="0.25" />
+          <stop offset="0%" stopColor="#a052e5" stopOpacity="0.7" />
+          <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.25" />
         </linearGradient>
 
         {/* Glow filter for traveling data pulses */}
@@ -61,14 +61,14 @@ export default function DataConnections() {
       {/* Path 3: Upward subtle link towards Revenue pulse */}
       <path
         d="M 252 230 C 220 170, 180 130, 150 90"
-        stroke="#23CED9"
+        stroke="#38bdf8"
         strokeWidth="1"
         strokeDasharray="2 3"
         opacity="0.35"
       />
 
       {/* Traveling Data Pulse Dot along Path 1 */}
-      <circle r="3.5" fill="#23CED9" filter="url(#pulseGlow)">
+      <circle r="3.5" fill="#38bdf8" filter="url(#pulseGlow)">
         <animateMotion
           dur="3.6s"
           repeatCount="indefinite"

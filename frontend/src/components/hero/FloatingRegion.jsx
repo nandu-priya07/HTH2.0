@@ -17,8 +17,9 @@ export default function FloatingRegion({ style, isHighlighted = false }) {
       className={`float-card fc-region-insight ${isHighlighted ? 'is-highlighted' : ''}`}
       style={style}
     >
-      <div className="fc-stage-tag stage-analysis">ANALYSIS</div>
+      <div className="fc-stage-tag stage-geo">REGIONAL</div>
       <div className="fc-label">
+        <span className="fc-node-dot dot-pin" aria-hidden="true" />
         <GlobeIcon size={12} />
         <span>Top Performing Region</span>
       </div>

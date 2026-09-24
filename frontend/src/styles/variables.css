@@ -7,103 +7,134 @@
 :root {
   color-scheme: light;
 
-  /* ── QueryLens brand palette ──
-     Deep teal is the core brand. The hero video (a luminous blue/cyan world on ice)
-     is the visual anchor; the UI echoes its *roles*, not its blue:
-       cyan light-arcs     → Cyan   = active analysis
-       green delta arrows  → Sage   = validated / positive
-       location pin        → Coral  = geographic attention
-       warm trend stroke   → Yellow = discovery / key data point
-     Accents are information, not decoration: ~80% of the UI stays neutral. */
-  --teal-900: #064E55;
-  --teal-700: #076670;
-  --teal-600: #097C87;   /* Deep Teal — primary */
-  --teal-100: #D7EFEF;
-  --teal-50:  #EAF7F7;
+  /* ── Video-Derived Color System (Visual Source of Truth) ──
+     Extracted directly from Analytics_homepage_hero_animatio…_1080p_20260924184427.mp4:
+       • Background / Ice atmosphere: #ecf4fb to #e3edf8 (RGB 236, 244, 251)
+       • Globe facets: deep analytical blue #1e3a6a to cobalt #2563eb / #4387e6
+       • Data nodes & light arcs: glowing cyan #0ea5e9 / bright #38bdf8
+       • Prominent map location pin: radiant orchid / violet #a052e5 / core #9333ea
+       • Trend lines & positive deltas: mint / emerald #10b981 / #16a34a
+       • Card surfaces: crisp white #ffffff with subtle 1px border #d8e6f5
+       • Dark text: deep slate-navy #0a0f1d (RGB 10, 11, 20)
+       • Supporting text: analytical slate #4d6079, muted #7b8fa7
+  ── */
 
-  --cyan-500: #23CED9;   /* Bright Cyan — analysis accent (not text-safe) */
-  --cyan-700: #0B8F9B;   /* text-safe cyan */
-  --cyan-100: #D4F5F7;
+  /* Video palette tokens */
+  --video-background:    #ecf4fb;
+  --video-bg-subtle:     #f5f9fd;
+  --video-bg-alt:        #e3edf8;
+  --video-surface:       #ffffff;
+  --video-surface-muted: #f6f9fd;
+  --video-text:          #0a0f1d;
+  --video-muted:         #4d6079;
+  --video-tertiary:      #7b8fa7;
+  --video-border:        #d8e6f5;
+  --video-border-strong: #bdd5ee;
 
-  --coral-500: #FCA47C;  /* Coral — geographic attention */
-  --coral-700: #B8532A;  /* text-safe coral */
-  --coral-100: #FEEBE2;
+  /* Video accents */
+  --video-primary:       #0f172a;   /* Obsidian slate-navy anchor / primary action */
+  --video-secondary:     #2563eb;   /* Continent crystalline cobalt */
+  --video-cool:          #0ea5e9;   /* Glowing cyan data nodes & arcs */
+  --video-cyan-bright:   #38bdf8;   /* Luminous cyan node core */
+  --video-warm:          #a052e5;   /* Focal location pin on globe (orchid violet) */
+  --video-pin-core:      #9333ea;   /* Vivid pin center */
+  --video-accent:        #10b981;   /* Card trend & validation emerald */
+  --video-accent-dark:   #16a34a;
+  --video-highlight:     #ffffff;   /* Pure white burst */
 
-  --yellow-500: #F9D779; /* Warm Yellow — discovery */
-  --yellow-800: #7A5B00; /* text-safe yellow */
-  --yellow-100: #FDF5DC;
+  /* Atmospheric glows */
+  --video-glow:          rgba(14, 165, 233, 0.22);
+  --video-glow-pin:      rgba(160, 82, 229, 0.20);
+  --video-glow-ambient:  rgba(98, 177, 238, 0.15);
 
-  --sage-500: #A1CCA6;   /* Soft Sage — validation */
-  --sage-800: #2E6B38;   /* text-safe sage */
-  --sage-100: #E7F3E8;
+  /* Legacy brand token bridges mapped to video palette */
+  --teal-900: #0f172a;
+  --teal-700: #1e3a8a;
+  --teal-600: #2563eb;
+  --teal-100: #dbeafe;
+  --teal-50:  #eff6ff;
 
-  /* ── Semantic signal roles (color = meaning) ── */
-  --signal-core:      var(--teal-600);
-  --signal-analysis:  var(--cyan-500);
-  --signal-geo:       var(--coral-500);
-  --signal-discovery: var(--yellow-500);
-  --signal-valid:     var(--sage-500);
+  --cyan-500: var(--video-cyan-bright);
+  --cyan-700: var(--video-cool);
+  --cyan-100: #e0f2fe;
 
-  /* ── --ql-* aliases used by the home / hero styles, mapped onto the brand ── */
-  --ql-primary:          var(--teal-600);
-  --ql-primary-dark:     var(--teal-700);
-  --ql-ink:              #0B3B42;   /* deepest brand ink: headings, avatar */
-  --ql-electric:         var(--cyan-700);
-  --ql-cyan:             var(--cyan-500);
-  --ql-cyan-bright:      #6FE0E7;
-  --ql-ice:              var(--teal-50);
-  --ql-bg:               #F8FCFB;
-  --ql-bg-warm:          #FBFAF6;   /* warm off-white — keeps the page from feeling sterile */
-  --ql-bg-alt:           #F1F8F7;
-  --ql-surface:          #FFFFFF;
-  --ql-surface-blue:     #F4FAF9;   /* legacy name — now a soft teal-mist surface */
-  --ql-text:             #102F35;
-  --ql-text-secondary:   #557177;
-  --ql-text-tertiary:    #7A9398;
-  --ql-border:           #DDEDEC;
-  --ql-border-strong:    #C4DFDD;
-  --ql-blue-glow:        rgba(9, 124, 135, 0.14);
-  --ql-cyan-glow:        rgba(35, 206, 217, 0.20);
-  --ql-card-shadow:      0 14px 36px -6px rgba(16, 47, 53, 0.10);
-  --ql-success:          #3E8E52;
-  --ql-violet:           var(--coral-500);  /* retired: the violet accent now maps to coral */
+  --coral-500: var(--video-warm);
+  --coral-700: #7e22ce;
+  --coral-100: #f5f3ff;
+
+  --yellow-500: #0284c7;
+  --yellow-800: #0369a1;
+  --yellow-100: #e0f2fe;
+
+  --sage-500: var(--video-accent);
+  --sage-800: var(--video-accent-dark);
+  --sage-100: #ecfdf5;
+
+  /* ── Semantic signal roles (grounded in the video) ── */
+  --signal-core:      var(--video-primary);
+  --signal-analysis:  var(--video-cool);
+  --signal-geo:       var(--video-warm);
+  --signal-discovery: var(--video-cyan-bright);
+  --signal-valid:     var(--video-accent);
+
+  /* ── --ql-* aliases used by the home / hero styles ── */
+  --ql-primary:          var(--video-primary);
+  --ql-primary-dark:     #020617;
+  --ql-ink:              var(--video-text);
+  --ql-electric:         var(--video-cool);
+  --ql-cyan:             var(--video-cyan-bright);
+  --ql-cyan-bright:      #67e8f9;
+  --ql-ice:              var(--video-background);
+  --ql-bg:               var(--video-background);
+  --ql-bg-warm:          var(--video-bg-subtle);
+  --ql-bg-alt:           var(--video-bg-alt);
+  --ql-surface:          var(--video-surface);
+  --ql-surface-blue:     #f0f6fd;
+  --ql-text:             var(--video-text);
+  --ql-text-secondary:   var(--video-muted);
+  --ql-text-tertiary:    var(--video-tertiary);
+  --ql-border:           var(--video-border);
+  --ql-border-strong:    var(--video-border-strong);
+  --ql-blue-glow:        var(--video-glow);
+  --ql-cyan-glow:        rgba(56, 189, 248, 0.28);
+  --ql-card-shadow:      0 10px 28px -4px rgba(15, 23, 42, 0.07), 0 2px 8px -2px rgba(15, 23, 42, 0.04);
+  --ql-success:          var(--video-accent);
+  --ql-violet:           var(--video-warm);
 
   /* ── Semantic roles ── */
-  --color-bg:          var(--ql-bg);
-  --color-bg-alt:      var(--ql-bg-alt);
-  --color-surface:     var(--ql-surface);
-  --color-surface-2:   #FBFEFD;
-  --color-text:        var(--ql-text);
-  --color-text-2:      var(--ql-text-secondary);
-  --color-text-3:      var(--ql-text-tertiary);
-  --color-border:      var(--ql-border);
-  --color-border-strong: var(--ql-border-strong);
-  --color-primary:     var(--teal-600);
-  --color-primary-hover: var(--teal-700);
-  --color-primary-soft: var(--teal-50);
-  --color-accent:      var(--cyan-500);
-  --color-on-primary:  #FFFFFF;
+  --color-bg:          var(--video-background);
+  --color-bg-alt:      var(--video-bg-alt);
+  --color-surface:     var(--video-surface);
+  --color-surface-2:   var(--video-surface-muted);
+  --color-text:        var(--video-text);
+  --color-text-2:      var(--video-muted);
+  --color-text-3:      var(--video-tertiary);
+  --color-border:      var(--video-border);
+  --color-border-strong: var(--video-border-strong);
+  --color-primary:     var(--video-secondary);
+  --color-primary-hover: #1d4ed8;
+  --color-primary-soft: #eff6ff;
+  --color-accent:      var(--video-cool);
+  --color-on-primary:  #ffffff;
 
-  /* Status (reserved — always paired with icon + label) */
-  --status-good-fg:    var(--sage-800);
-  --status-good-bg:    var(--sage-100);
-  --status-warn-fg:    var(--yellow-800);
-  --status-warn-bg:    var(--yellow-100);
-  --status-bad-fg:     #A13A1C;
-  --status-bad-bg:     var(--coral-100);
-  --status-info-fg:    var(--teal-700);
-  --status-info-bg:    var(--teal-50);
+  /* Status */
+  --status-good-fg:    #15803d;
+  --status-good-bg:    #ecfdf5;
+  --status-warn-fg:    #b45309;
+  --status-warn-bg:    #fffbeb;
+  --status-bad-fg:     #b91c1c;
+  --status-bad-bg:     #fef2f2;
+  --status-info-fg:    #0369a1;
+  --status-info-bg:    #f0f9ff;
 
-  /* Chart series — deeper steps of the brand hues, validated
-     (lightness band, chroma, CVD + normal-vision separation) in fixed order.
-     Slots 3 & 4 are < 3:1 on white → tooltips + table view always available. */
-  --series-1: #008A9E;  /* teal   */
-  --series-2: #E2682F;  /* coral  */
-  --series-3: #1FB5C8;  /* cyan   */
-  --series-4: #C28C00;  /* yellow */
-  --series-5: #2E7A3C;  /* sage   */
-  --chart-grid: #E6F1F0;
-  --chart-axis: #7A9398;
+  /* Chart series — extracted from video facets, markers, and metrics */
+  --series-1: #2563eb;  /* continent cobalt */
+  --series-2: #a052e5;  /* location pin violet */
+  --series-3: #0ea5e9;  /* data cyan */
+  --series-4: #10b981;  /* metric green */
+  --series-5: #64748b;  /* neutral slate */
+  --chart-grid: #e2edf8;
+  --chart-axis: #7b8fa7;
 
   /* ── Typography ── */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;

@@ -66,6 +66,7 @@ export default function FloatingQuery({ style, isHighlighted = false }) {
 
       <div className="fc-query-header">
         <span className="fc-label accent">
+          <span className="fc-node-dot dot-cyan" aria-hidden="true" />
           <SparklesIcon size={12} />
           <span>Ask AI · Natural Query</span>
         </span>

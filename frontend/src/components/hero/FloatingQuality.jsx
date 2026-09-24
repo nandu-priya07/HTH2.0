@@ -30,10 +30,10 @@ export default function FloatingQuality({ style, isHighlighted = false }) {
           <svg width="44" height="44" viewBox="0 0 44 44">
             {/* Gradient definition */}
             <defs>
-              {/* Validation accent: sage into deep sage */}
+              {/* Validation accent: emerald into deep green */}
               <linearGradient id="qualityGaugeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#A1CCA6" />
-                <stop offset="100%" stopColor="#3E8E52" />
+                <stop offset="0%" stopColor="#34d399" />
+                <stop offset="100%" stopColor="#059669" />
               </linearGradient>
             </defs>
             {/* Background track */}
@@ -42,7 +42,7 @@ export default function FloatingQuality({ style, isHighlighted = false }) {
               cy="22"
               r={radius}
               fill="none"
-              stroke="#EDF4EE"
+              stroke="#e2edf8"
               strokeWidth="3.5"
             />
             {/* Animated progress circle */}

@@ -1,7 +1,7 @@
 /**
  * Primary Geographic Location Marker.
  * Positioned on the active region of the globe visual.
- * Coral #FCA47C with subtle pulsing halo and radial glow.
+ * Matches the video's prominent orchid/violet pin #a052e5 with radiant core and pulsing halo.
  */
 export default function GlobeMarker({ x = '42%', y = '48%', label = 'West Region' }) {
   return (

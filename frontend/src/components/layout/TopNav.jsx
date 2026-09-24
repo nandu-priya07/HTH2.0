@@ -89,10 +89,10 @@ export default function TopNav() {
         <Link to="/" className="brand" aria-label="QueryLens home">
           <span className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32" width="32" height="32">
-              <rect width="32" height="32" rx="9" fill="var(--teal-600)" />
+              <rect width="32" height="32" rx="9" fill="var(--video-primary)" />
               <rect x="8" y="17" width="4" height="7" rx="1.5" fill="#fff" />
               <rect x="14" y="12" width="4" height="12" rx="1.5" fill="#fff" opacity="0.85" />
-              <rect x="20" y="8" width="4" height="16" rx="1.5" fill="var(--cyan-500)" />
+              <rect x="20" y="8" width="4" height="16" rx="1.5" fill="var(--video-cool)" />
             </svg>
           </span>
           <span className="brand-text">
