@@ -5,20 +5,21 @@ import {
   DatabaseIcon,
   TableIcon,
   TrashIcon,
-  CheckCircleIcon,
-  CloseIcon
+  CloseIcon,
+  SettingsIcon,
+  HelpCircleIcon
 } from './Icons'
 
 export default function ChatSidebar({
   onNewChat,
   activeDataset,
   onClearDataset,
-  onSelectSavedQuery
+  onSelectSavedQuery,
+  isOpen
 }) {
   const [selectedChatId, setSelectedChatId] = useState(1)
   const [showSchemaModal, setShowSchemaModal] = useState(false)
 
-  // Example history groups
   const recentChatGroups = [
     {
       group: 'Today',
@@ -29,10 +30,17 @@ export default function ChatSidebar({
       ]
     },
     {
-      group: 'Previous',
+      group: 'Yesterday',
       items: [
         { id: 4, title: 'Monthly Growth & Trends' },
         { id: 5, title: 'Customer Segmentation' }
+      ]
+    },
+    {
+      group: 'Older',
+      items: [
+        { id: 6, title: 'Profit Margin Analysis' },
+        { id: 7, title: 'Discount Impact Study' }
       ]
     }
   ]
@@ -47,128 +55,143 @@ export default function ChatSidebar({
 
   const getSemanticTypeBadge = (type) => {
     switch (type) {
-      case 'numeric':
-        return <span className="type-badge numeric">NUM</span>
-      case 'date':
-        return <span className="type-badge date">DATE</span>
-      case 'identifier':
-        return <span className="type-badge identifier">ID</span>
-      case 'boolean':
-        return <span className="type-badge boolean">BOOL</span>
-      default:
-        return <span className="type-badge categorical">CAT</span>
+      case 'numeric':    return <span className="type-badge numeric">NUM</span>
+      case 'date':       return <span className="type-badge date">DATE</span>
+      case 'identifier': return <span className="type-badge identifier">ID</span>
+      case 'boolean':    return <span className="type-badge boolean">BOOL</span>
+      default:           return <span className="type-badge categorical">CAT</span>
     }
   }
 
   return (
     <>
-      <aside className="chat-sidebar">
-        {/* Sidebar Header Branding */}
-        <div className="sidebar-header">
-          <div className="sidebar-logo-glow">
-            <SparklesIcon size={18} className="logo-sparkle" />
-          </div>
-          <div className="sidebar-brand-text">
-            <div className="sidebar-title">HTH2.0</div>
-            <div className="sidebar-subtitle">AI Data Analyst</div>
-          </div>
-        </div>
+      <aside
+        className={`chat-sidebar${isOpen ? ' open' : ''}`}
+        aria-label="Sidebar navigation"
+      >
+        <div className="sidebar-inner">
+          {/* New Analysis Button */}
+          <button
+            className="new-chat-btn"
+            onClick={onNewChat}
+            aria-label="Start new analysis"
+          >
+            <PlusIcon size={16} />
+            <span>New Analysis</span>
+          </button>
 
-        {/* New Analysis Button */}
-        <button className="new-chat-btn" onClick={onNewChat}>
-          <PlusIcon size={16} />
-          <span>New Analysis</span>
-        </button>
-
-        {/* Active Dataset Inspector Section */}
-        {activeDataset && (
-          <div className="sidebar-dataset-card animate-fade-in">
-            <div className="dataset-card-header">
-              <div className="dataset-card-title">
-                <DatabaseIcon size={14} />
-                <span>Active Dataset</span>
+          {/* Active Dataset Card */}
+          {activeDataset && (
+            <div className="sidebar-dataset-card animate-fade-in">
+              <div className="dataset-card-header">
+                <div className="dataset-card-title">
+                  <DatabaseIcon size={13} />
+                  <span>Active Dataset</span>
+                </div>
+                <button
+                  className="dataset-clear-btn"
+                  onClick={onClearDataset}
+                  title="Disconnect dataset"
+                  aria-label="Disconnect dataset"
+                >
+                  <TrashIcon size={13} />
+                </button>
               </div>
-              <button
-                className="dataset-clear-btn"
-                onClick={onClearDataset}
-                title="Disconnect dataset"
-              >
-                <TrashIcon size={13} />
-              </button>
+
+              <div className="dataset-info-row">
+                <span className="dataset-filename" title={datasetName}>{datasetName}</span>
+              </div>
+
+              <div className="dataset-metrics-grid">
+                <div className="dataset-stat">
+                  <span className="stat-label">Rows</span>
+                  <span className="stat-val">{rowCount ? rowCount.toLocaleString() : '—'}</span>
+                </div>
+                <div className="dataset-stat">
+                  <span className="stat-label">Columns</span>
+                  <span className="stat-val">{colCount || '—'}</span>
+                </div>
+              </div>
+
+              {schemaColumns.length > 0 && (
+                <button
+                  className="view-schema-btn"
+                  onClick={() => setShowSchemaModal(true)}
+                >
+                  <TableIcon size={13} />
+                  <span>Inspect Schema ({schemaColumns.length})</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Recent Chats History */}
+          <div className="sidebar-history-section">
+            {recentChatGroups.map((group, gIdx) => (
+              <div key={gIdx} className="history-group">
+                <div className="history-group-title">{group.group}</div>
+                <div className="history-list">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      className={`history-item ${selectedChatId === item.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setSelectedChatId(item.id)
+                        if (onSelectSavedQuery) onSelectSavedQuery(item.title)
+                      }}
+                      title={item.title}
+                    >
+                      <span className="history-bullet" aria-hidden="true">•</span>
+                      <span className="history-item-text">{item.title}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Sidebar Footer */}
+          <div className="sidebar-footer">
+            <div className="engine-status-badge">
+              <span className="pulse-indicator" aria-hidden="true" />
+              <span>Analytics Engine Active</span>
             </div>
 
-            <div className="dataset-info-row">
-              <span className="dataset-filename" title={datasetName}>{datasetName}</span>
-            </div>
+            <button className="sidebar-footer-btn" aria-label="Settings">
+              <SettingsIcon size={15} />
+              <span>Settings</span>
+            </button>
 
-            <div className="dataset-metrics-grid">
-              <div className="dataset-stat">
-                <span className="stat-label">Rows</span>
-                <span className="stat-val">{rowCount ? rowCount.toLocaleString() : '-'}</span>
-              </div>
-              <div className="dataset-stat">
-                <span className="stat-label">Columns</span>
-                <span className="stat-val">{colCount || '-'}</span>
-              </div>
-            </div>
+            <button className="sidebar-footer-btn" aria-label="Help">
+              <HelpCircleIcon size={15} />
+              <span>Help & Support</span>
+            </button>
 
-            {schemaColumns.length > 0 && (
-              <button
-                className="view-schema-btn"
-                onClick={() => setShowSchemaModal(true)}
-              >
-                <TableIcon size={13} />
-                <span>Inspect Schema ({schemaColumns.length})</span>
-              </button>
-            )}
+            <div className="version-tag">Dataset-Agnostic Core v2.0</div>
           </div>
-        )}
-
-        {/* Recent Chats Section */}
-        <div className="sidebar-history-section">
-          {recentChatGroups.map((group, gIdx) => (
-            <div key={gIdx} className="history-group">
-              <div className="history-group-title">{group.group}</div>
-              <div className="history-list">
-                {group.items.map((item) => (
-                  <button
-                    key={item.id}
-                    className={`history-item ${selectedChatId === item.id ? 'active' : ''}`}
-                    onClick={() => {
-                      setSelectedChatId(item.id)
-                      if (onSelectSavedQuery) onSelectSavedQuery(item.title)
-                    }}
-                    title={item.title}
-                  >
-                    <span className="history-bullet">•</span>
-                    <span className="history-item-text">{item.title}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Sidebar Footer Status */}
-        <div className="sidebar-footer">
-          <div className="engine-status-badge">
-            <span className="pulse-indicator"></span>
-            <span>Analytics Engine Active</span>
-          </div>
-          <div className="version-tag">Dataset-Agnostic Core v2.0</div>
         </div>
       </aside>
 
       {/* Schema Inspector Modal */}
       {showSchemaModal && (
-        <div className="modal-backdrop animate-fade-in" onClick={() => setShowSchemaModal(false)}>
+        <div
+          className="modal-backdrop animate-fade-in"
+          onClick={() => setShowSchemaModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Schema inspector"
+        >
           <div className="schema-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title-group">
                 <TableIcon size={18} />
                 <h3>Dataset Schema & Types</h3>
               </div>
-              <button className="modal-close-btn" onClick={() => setShowSchemaModal(false)}>
+              <button
+                className="modal-close-btn"
+                onClick={() => setShowSchemaModal(false)}
+                aria-label="Close schema inspector"
+              >
                 <CloseIcon size={16} />
               </button>
             </div>
