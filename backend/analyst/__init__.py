@@ -4,6 +4,7 @@ Analyst package powered by local Ollama Qwen3:8b and Pandas execution.
 
 from .models import (
     QuerySpec,
+    ConditionSpec,
     LLMResponse,
     QueryResult,
     ResponseType,
@@ -13,11 +14,12 @@ from .models import (
 )
 
 from .query_processor import process_query_with_llm
-from .validator import validate_query_spec
-from .query_executor import execute_query
+from .validator import validate_query_spec, validate_queries
+from .query_executor import execute_query, execute_queries
 
 __all__ = [
     "QuerySpec",
+    "ConditionSpec",
     "LLMResponse",
     "QueryResult",
     "ResponseType",
@@ -26,5 +28,7 @@ __all__ = [
     "SortSpec",
     "process_query_with_llm",
     "validate_query_spec",
-    "execute_query"
+    "validate_queries",
+    "execute_query",
+    "execute_queries"
 ]

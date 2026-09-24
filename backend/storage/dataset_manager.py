@@ -5,6 +5,7 @@ and dynamic analytical question suggestion generation.
 """
 
 import os
+import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -28,66 +29,80 @@ def register_dataset(dataset_id: str, info: Dict[str, Any]) -> None:
     DATASET_REGISTRY[dataset_id] = info
 
 
+def save_dataset_meta(dataset_id: str, meta: Dict[str, Any]) -> None:
+    """Saves lightweight dataset metadata sidecar for exact persistence across restarts."""
+    try:
+        if not PROCESSED_DIR.exists():
+            PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+        meta_file = PROCESSED_DIR / f"{dataset_id}.meta.json"
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+    except Exception as e:
+        logger.warning(f"Failed to write meta.json for {dataset_id}: {e}")
+
+
 def get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Retrieves dataset from in-memory registry, or loads processed CSV from disk if available.
-    If dataset_id is None, returns the most recently loaded/modified dataset.
+    Returns None if dataset_id is None, empty, or not found.
+    Never guesses or falls back to a global dataset when dataset_id is None.
     """
+    if not dataset_id or not str(dataset_id).strip():
+        return None
+
+    clean_id = str(dataset_id).strip()
+
     # 1. Check in-memory registry for specific dataset_id
-    if dataset_id and dataset_id in DATASET_REGISTRY:
-        return DATASET_REGISTRY[dataset_id]
+    if clean_id in DATASET_REGISTRY:
+        return DATASET_REGISTRY[clean_id]
 
-    # 2. If no dataset_id specified, return most recent from in-memory registry if available
-    if not dataset_id and DATASET_REGISTRY:
-        return list(DATASET_REGISTRY.values())[-1]
-
-    # 3. Check disk for processed CSV files
+    # 2. Check disk for processed CSV files
     if PROCESSED_DIR.exists():
-        if dataset_id:
-            target_csv = PROCESSED_DIR / f"{dataset_id}.csv"
-            candidates = [target_csv] if target_csv.exists() else []
-        else:
-            candidates = sorted(
-                list(PROCESSED_DIR.glob("*.csv")),
-                key=lambda p: (p.stat().st_mtime, p.stat().st_size),
-                reverse=True
-            )
-
-        if candidates:
-            csv_path = candidates[0]
-            ds_id = csv_path.stem
-
+        target_csv = PROCESSED_DIR / f"{clean_id}.csv"
+        if target_csv.exists():
             try:
-                df = pd.read_csv(csv_path)
+                df = pd.read_csv(target_csv)
                 schema = infer_schema(df)
                 profile = profile_dataset(df, schema)
 
-                # Check if raw file exists to recover original filename
-                original_filename = f"{ds_id}.csv"
-                file_size = csv_path.stat().st_size
+                # Recover original filename & metadata
+                original_filename = f"{clean_id}.csv"
+                file_size = target_csv.stat().st_size
                 file_type = "csv"
 
-                if RAW_DIR.exists():
-                    raw_matches = list(RAW_DIR.glob(f"{ds_id}.*"))
+                # Check sidecar meta.json first
+                meta_json_path = PROCESSED_DIR / f"{clean_id}.meta.json"
+                if meta_json_path.exists():
+                    try:
+                        with open(meta_json_path, "r", encoding="utf-8") as mf:
+                            meta_data = json.load(mf)
+                            original_filename = meta_data.get("filename") or meta_data.get("original_filename") or original_filename
+                            file_type = meta_data.get("file_type") or file_type
+                            file_size = meta_data.get("file_size") or file_size
+                    except Exception:
+                        pass
+                elif RAW_DIR.exists():
+                    raw_matches = list(RAW_DIR.glob(f"{clean_id}.*"))
                     if raw_matches:
                         raw_file = raw_matches[0]
                         file_type = raw_file.suffix.lstrip(".").lower()
                         file_size = raw_file.stat().st_size
+                        original_filename = raw_file.name
 
                 ds_entry = {
-                    "dataset_id": ds_id,
+                    "dataset_id": clean_id,
                     "filename": original_filename,
-                    "stored_filename": f"{ds_id}.{file_type}",
-                    "processed_filename": f"{ds_id}.csv",
-                    "file_path": str(csv_path),
+                    "stored_filename": f"{clean_id}.{file_type}",
+                    "processed_filename": f"{clean_id}.csv",
+                    "file_path": str(target_csv),
                     "file_type": file_type,
                     "file_size": file_size,
                     "status": "processed",
                     "data": df,
                     "metadata": {
-                        "dataset_id": ds_id,
+                        "dataset_id": clean_id,
                         "original_filename": original_filename,
-                        "processed_filename": f"{ds_id}.csv",
+                        "processed_filename": f"{clean_id}.csv",
                         "row_count": len(df),
                         "column_count": len(df.columns),
                         "rows": len(df),
@@ -100,9 +115,9 @@ def get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, 
                         "rows_removed": 0
                     },
                     "result": {
-                        "dataset_id": ds_id,
+                        "dataset_id": clean_id,
                         "original_filename": original_filename,
-                        "processed_filename": f"{ds_id}.csv",
+                        "processed_filename": f"{clean_id}.csv",
                         "schema": schema,
                         "profile": profile,
                         "metadata": {
@@ -111,10 +126,11 @@ def get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, 
                         }
                     }
                 }
-                DATASET_REGISTRY[ds_id] = ds_entry
+                DATASET_REGISTRY[clean_id] = ds_entry
                 return ds_entry
             except Exception as e:
-                logger.error(f"Failed to auto-load processed dataset from {csv_path}: {e}")
+                logger.error(f"Failed to auto-load processed dataset {clean_id} from disk: {e}")
+                return None
 
     return None
 

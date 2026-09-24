@@ -219,3 +219,48 @@ export function FileTextIcon({ size = 18, className = "" }) {
     </svg>
   )
 }
+
+export function PieChartIcon({ size = 18, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...iconDefaults} className={className}>
+      <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+      <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+    </svg>
+  )
+}
+
+export function LineChartIcon({ size = 18, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...iconDefaults} className={className}>
+      <path d="M3 3v18h18"/>
+      <path d="m19 9-5 5-4-4-3 3"/>
+    </svg>
+  )
+}
+
+export function EditIcon({ size = 16, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...iconDefaults} className={className}>
+      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+      <path d="m15 5 4 4"/>
+    </svg>
+  )
+}
+
+export function CheckIcon({ size = 16, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...iconDefaults} className={className}>
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  )
+}
+
+export function MessageSquareIcon({ size = 18, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...iconDefaults} className={className}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </svg>
+  )
+}
+
+

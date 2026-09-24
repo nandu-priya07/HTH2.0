@@ -1,15 +1,93 @@
 """
 Deterministic Pandas Query Executor module.
-Executes structured QuerySpec instructions strictly using deterministic Pandas operations.
+Executes single-query, multi-query, and multi-column conditional count instructions
+strictly using deterministic Pandas operations.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 import re
 import numpy as np
 import pandas as pd
 
 from .models import QuerySpec, QueryResult, ResponseType
-from .validator import validate_query_spec
+from .validator import validate_query_spec, validate_queries
+
+
+def execute_queries(queries: List[QuerySpec], df: pd.DataFrame) -> QueryResult:
+    """
+    Executes one or multiple QuerySpecs against a Pandas DataFrame.
+    """
+    if not queries:
+        return QueryResult(
+            success=False,
+            type=ResponseType.ERROR.value,
+            error="No queries provided for execution."
+        )
+
+    if len(queries) == 1:
+        return execute_query(queries[0], df)
+
+    # Multi-query execution
+    sub_results: List[QueryResult] = []
+    for idx, q in enumerate(queries):
+        sub_res = execute_query(q, df)
+        if not sub_res.success:
+            return QueryResult(
+                success=False,
+                type=ResponseType.ERROR.value,
+                error=f"Query #{idx + 1} failed: {sub_res.error}",
+                text=f"Query #{idx + 1} execution failed: {sub_res.error}"
+            )
+        sub_results.append(sub_res)
+
+    # Combine results
+    queries_dict_list = [q.to_dict() for q in queries]
+    results_list = [r.result for r in sub_results]
+    scalars = [r.scalar for r in sub_results if r.scalar is not None]
+    tables = [r.table for r in sub_results if r.table is not None]
+
+    # Combine text summaries
+    summary_lines = ["Calculated multi-operation analysis:"]
+    for idx, r in enumerate(sub_results):
+        if r.text:
+            summary_lines.append(f"- {r.text}")
+
+    combined_text = "\n".join(summary_lines)
+
+    # If all queries are scalar metrics, build a unified summary table
+    combined_table = None
+    if len(scalars) == len(sub_results) and len(scalars) > 1:
+        combined_table = {
+            "headers": ["metric", "aggregation", "value"],
+            "rows": [
+                [
+                    s.get("metric", "metric"),
+                    s.get("aggregation", "agg"),
+                    _sanitize_scalar(s.get("value"))
+                ]
+                for s in scalars
+            ]
+        }
+    elif tables:
+        combined_table = tables[0]
+
+    return QueryResult(
+        success=True,
+        type=ResponseType.DATA_RESULT.value,
+        query=queries_dict_list[0] if queries_dict_list else None,
+        queries=queries_dict_list,
+        result=results_list,
+        results=results_list,
+        scalar=scalars[0] if scalars else None,
+        scalars=scalars if scalars else None,
+        table=combined_table,
+        tables=tables if tables else None,
+        text=combined_text,
+        metadata={
+            "queries_executed": len(queries),
+            "rows_analyzed": len(df)
+        }
+    )
 
 
 def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
@@ -36,6 +114,7 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
         return col_map.get(name.lower(), name)
 
     target_col = _resolve_col(spec.column)
+    target_cols = [_resolve_col(c) for c in (spec.columns or []) if _resolve_col(c) in df_copy.columns]
     group_cols = [_resolve_col(g) for g in spec.group_by if _resolve_col(g) in df_copy.columns]
 
     # 3. Apply Filters First
@@ -54,7 +133,51 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
     filtered_rows = len(df_copy)
     op = (spec.operation or "count").lower().strip()
 
-    # 4. Group-By Execution
+    # 4. CONDITIONAL_COUNT across multiple or single columns
+    if op == "conditional_count":
+        eval_cols = target_cols if target_cols else ([target_col] if target_col else [])
+        cond = spec.condition or {}
+        cond_op = str(cond.get("operator", "equals") if isinstance(cond, dict) else getattr(cond, "operator", "equals")).lower()
+        cond_val = cond.get("value") if isinstance(cond, dict) else getattr(cond, "value", None)
+
+        records = []
+        rows = []
+        for col in eval_cols:
+            cnt = _count_column_condition(df_copy[col], cond_op, cond_val)
+            records.append({
+                "column": col,
+                "condition": cond_val,
+                "count": cnt
+            })
+            rows.append([col, cond_val, cnt])
+
+        table_payload = {
+            "headers": ["column", "condition", "count"],
+            "rows": rows
+        }
+
+        cols_count = len(eval_cols)
+        summary_text = f"Calculated **{cond_val}** counts across **{cols_count}** columns ({filtered_rows:,} rows analyzed):"
+
+        return QueryResult(
+            success=True,
+            type=ResponseType.DATA_RESULT.value,
+            query={
+                "operation": op,
+                "columns": eval_cols,
+                "condition": {"operator": cond_op, "value": cond_val}
+            },
+            result=records,
+            table=table_payload,
+            text=summary_text,
+            metadata={
+                "rows_analyzed": total_rows,
+                "filtered_rows": filtered_rows,
+                "columns_analyzed": cols_count
+            }
+        )
+
+    # 5. Group-By Execution
     if group_cols:
         records, table_payload, summary_text = _execute_groupby(df_copy, op, target_col, group_cols, spec)
         return QueryResult(
@@ -67,7 +190,7 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
             metadata={"rows_analyzed": total_rows, "filtered_rows": filtered_rows, "groups_count": len(records)}
         )
 
-    # 5. Non-Grouped Operations
+    # 6. Non-Grouped DISTINCT Operation
     if op == "distinct":
         if not target_col or target_col not in df_copy.columns:
             return QueryResult(
@@ -98,6 +221,7 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
             metadata={"rows_analyzed": total_rows, "filtered_rows": filtered_rows, "count": count_val}
         )
 
+    # 7. Non-Grouped COUNT_DISTINCT Operation
     if op == "count_distinct":
         val = int(df_copy[target_col].nunique()) if target_col and target_col in df_copy.columns else 0
         summary_text = f"The count of unique values in **{target_col}** is **{val:,}**."
@@ -116,6 +240,7 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
             metadata={"rows_analyzed": total_rows, "filtered_rows": filtered_rows}
         )
 
+    # 8. Non-Grouped Standard Aggregations (sum, average, count, min, max)
     if op in ("sum", "average", "mean", "min", "max", "count"):
         val = _compute_scalar(df_copy, op, target_col)
         formatted_val = f"{val:,.2f}" if isinstance(val, float) else f"{val:,}" if isinstance(val, int) else str(val)
@@ -141,6 +266,51 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
         type=ResponseType.ERROR.value,
         error=f"Unrecognized operation '{op}'."
     )
+
+
+def _count_column_condition(series: pd.Series, op: str, val: Any) -> int:
+    """Counts rows in a column series meeting a condition safely and deterministically."""
+    if len(series) == 0:
+        return 0
+
+    if op in ("equals", "=", "=="):
+        if val is None:
+            return int(series.isna().sum())
+        # String match ignoring case and whitespace
+        str_series = series.astype(str).str.strip()
+        str_val = str(val).strip()
+        return int((str_series.str.upper() == str_val.upper()).sum())
+
+    elif op in ("!=", "<>"):
+        if val is None:
+            return int(series.notna().sum())
+        str_series = series.astype(str).str.strip()
+        str_val = str(val).strip()
+        return int((str_series.str.upper() != str_val.upper()).sum())
+
+    elif op == "contains":
+        return int(series.astype(str).str.contains(str(val), case=False, na=False).sum())
+
+    elif op == "in" and isinstance(val, (list, tuple, set)):
+        val_set = {str(v).strip().upper() for v in val}
+        return int(series.astype(str).str.strip().str.upper().isin(val_set).sum())
+
+    elif op in (">", ">=", "<", "<="):
+        num_series = pd.to_numeric(series, errors="coerce")
+        try:
+            num_val = float(val)
+            if op == ">":
+                return int((num_series > num_val).sum())
+            elif op == ">=":
+                return int((num_series >= num_val).sum())
+            elif op == "<":
+                return int((num_series < num_val).sum())
+            elif op == "<=":
+                return int((num_series <= num_val).sum())
+        except Exception:
+            pass
+
+    return 0
 
 
 def _compute_scalar(df: pd.DataFrame, op: str, col: Optional[str]) -> Any:

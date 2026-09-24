@@ -2,8 +2,8 @@ import os
 import uuid
 import logging
 from pathlib import Path
-from typing import Dict, Any
-from fastapi import APIRouter, File, UploadFile, status
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, File, Form, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from file_processing.pipeline import process_file, FileProcessingError
@@ -13,10 +13,12 @@ from storage.dataset_manager import (
     RAW_DIR,
     PROCESSED_DIR,
     register_dataset,
+    save_dataset_meta,
     get_or_load_dataset,
     list_all_datasets,
     generate_suggestions
 )
+from chat import get_chat_service
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +52,13 @@ async def get_datasets_list():
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(None)):
+async def upload_file(
+    file: UploadFile = File(None),
+    conversation_id: Optional[str] = Form(None)
+):
     """
     Ingests, validates, profiles, and cleans uploaded CSV/Excel files.
+    Optionally associates the new dataset with an active conversation_id.
     """
     # 1. Validate file presence
     if not file or not file.filename or file.filename.strip() == "":
@@ -112,7 +118,8 @@ async def upload_file(file: UploadFile = File(None)):
         process_result = process_file(
             file_path=file_path,
             dataset_id=dataset_id,
-            original_filename=filename
+            original_filename=filename,
+            processed_dir=PROCESSED_DIR
         )
     except FileProcessingError as e:
         logger.error(f"File processing failed for {dataset_id} at stage [{e.stage}]: {e.error}")
@@ -153,13 +160,29 @@ async def upload_file(file: UploadFile = File(None)):
         "cleaning_report": process_result["cleaning_report"]
     }
     register_dataset(dataset_id, dataset_entry)
+    save_dataset_meta(dataset_id, {
+        "dataset_id": dataset_id,
+        "filename": filename,
+        "stored_filename": stored_filename,
+        "processed_filename": process_result["processed_filename"],
+        "file_type": clean_ext,
+        "file_size": file_size
+    })
 
-    # 7. Return JSON response
+    # 7. Associate with conversation if conversation_id was provided
+    if conversation_id:
+        try:
+            get_chat_service().associate_dataset(conversation_id, dataset_id)
+        except Exception as e:
+            logger.warning(f"Failed to associate dataset {dataset_id} with conversation {conversation_id}: {e}")
+
+    # 8. Return JSON response
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
             "success": True,
             "dataset_id": dataset_id,
+            "conversation_id": conversation_id,
             "filename": filename,
             "stored_filename": stored_filename,
             "processed_filename": process_result["processed_filename"],
