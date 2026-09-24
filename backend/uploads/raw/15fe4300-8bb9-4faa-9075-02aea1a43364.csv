@@ -1,0 +1,3 @@
+order_id,customer_name,sales,order_date
+1001,Alice,150.50,2026-01-15
+1002,Bob,299.99,2026-01-16

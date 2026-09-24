@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.upload import router as upload_router
+from routes.query import router as query_router
 
 app = FastAPI(title="HTH2.0 AI Data Analyst API", version="2.0.0")
 
@@ -13,8 +14,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register upload API routes
+# Register API routes
 app.include_router(upload_router)
+app.include_router(query_router)
 
 @app.get("/")
 def read_root():

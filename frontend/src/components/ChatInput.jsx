@@ -1,4 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
+import {
+  PaperclipIcon,
+  SendIcon,
+  MicIcon,
+  CloseIcon,
+  AlertCircleIcon,
+  PlusIcon
+} from './Icons'
 
 export default function ChatInput({
   input,
@@ -17,8 +25,8 @@ export default function ChatInput({
   // Auto-resize textarea height
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = '38px'
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`
+      textareaRef.current.style.height = '42px'
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 140)}px`
     }
   }, [input])
 
@@ -42,7 +50,6 @@ export default function ChatInput({
       setSelectedFile(file)
       if (setUploadError) setUploadError(null)
     }
-    // Reset file input value so selecting the same file triggers onChange
     e.target.value = ''
   }
 
@@ -79,7 +86,7 @@ export default function ChatInput({
 
   return (
     <div className="chat-input-sticky">
-      {/* Hidden File Input Picker */}
+      {/* Hidden File Picker */}
       <input
         ref={fileInputRef}
         type="file"
@@ -88,22 +95,33 @@ export default function ChatInput({
         onChange={handleFileChange}
       />
 
-      <div className="input-box-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
+      <div className="input-box-card">
         {/* Tooltip Popup */}
-        {showTooltip && <div className="tooltip-popup">{showTooltip}</div>}
+        {showTooltip && (
+          <div className="tooltip-popup">
+            <span>{showTooltip}</span>
+          </div>
+        )}
 
         {/* Error Banner */}
         {uploadError && (
-          <div className="upload-error-banner">
-            <span>⚠️ {uploadError}</span>
-            <button className="error-close-btn" onClick={() => setUploadError(null)}>✕</button>
+          <div className="upload-error-banner animate-fade-in">
+            <div className="error-banner-content">
+              <AlertCircleIcon size={16} />
+              <span>{uploadError}</span>
+            </div>
+            <button className="error-close-btn" onClick={() => setUploadError(null)}>
+              <CloseIcon size={14} />
+            </button>
           </div>
         )}
 
         {/* Selected File Attachment Card Preview */}
         {selectedFile && (
-          <div className="file-attachment-preview">
-            <div className="attachment-icon">📎</div>
+          <div className="file-attachment-preview animate-fade-in">
+            <div className="attachment-icon-badge">
+              <PaperclipIcon size={15} />
+            </div>
             <div className="attachment-details">
               <div className="attachment-name">{selectedFile.name}</div>
               <div className="attachment-size">{formatFileSize(selectedFile.size)}</div>
@@ -113,58 +131,72 @@ export default function ChatInput({
               className="remove-attachment-btn"
               onClick={handleRemoveFile}
               disabled={isLoading}
-              title="Remove attachment"
+              title="Remove file"
             >
-              ✕
+              <CloseIcon size={13} />
             </button>
           </div>
         )}
 
         {/* Composer Controls Row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {/* LEFT: File Upload Button */}
+        <div className="composer-row">
+          {/* File Attach Button */}
           <button
             type="button"
             className={`input-action-btn ${selectedFile ? 'has-file' : ''}`}
             onClick={handleFileClick}
             disabled={isLoading}
-            title="Attach file (.csv, .xlsx, .xls)"
+            title="Attach CSV or Excel dataset"
           >
-            ＋
+            <PlusIcon size={18} />
           </button>
 
-          {/* CENTER: Textarea Input */}
+          {/* Textarea Input */}
           <textarea
             ref={textareaRef}
             className="chat-textarea"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={selectedFile ? "Add a message about your dataset... (optional)" : "Ask anything about your dataset..."}
+            placeholder={
+              selectedFile
+                ? "Attach this dataset and ask a question... (or send directly)"
+                : "Ask anything about your data in plain English..."
+            }
             rows={1}
             disabled={isLoading}
           />
 
-          {/* RIGHT: Voice & Send Buttons */}
+          {/* Voice Input Button */}
           <button
             type="button"
             className="input-action-btn"
-            onClick={() => triggerTooltip('Voice input feature coming soon')}
+            onClick={() => triggerTooltip('Voice query input coming soon')}
             disabled={isLoading}
-            title="Voice Input"
+            title="Voice input"
           >
-            🎤
+            <MicIcon size={17} />
           </button>
 
+          {/* Send Button */}
           <button
             type="button"
             className="send-btn-primary"
             onClick={handleSubmit}
             disabled={isSendDisabled}
-            title="Send Question"
+            title="Send query (Enter)"
           >
-            {isLoading ? '...' : '➤'}
+            {isLoading ? (
+              <span className="btn-spinner"></span>
+            ) : (
+              <SendIcon size={16} />
+            )}
           </button>
+        </div>
+
+        {/* Footer Shortcut Helper */}
+        <div className="input-footer-hint">
+          <span>Enter to submit • Shift + Enter for new line • CSV / Excel supported</span>
         </div>
       </div>
     </div>

@@ -91,6 +91,9 @@ def test_superstore_pipeline_end_to_end():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        proc_f = backend_dir / "uploads" / "processed" / "test_superstore_uuid.csv"
+        if proc_f.exists():
+            proc_f.unlink()
 
 def test_dataset_a_sales():
     """Test 2 — Dataset A (Sales CSV)"""
@@ -108,6 +111,9 @@ def test_dataset_a_sales():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        proc_f = backend_dir / "uploads" / "processed" / "ds_a.csv"
+        if proc_f.exists():
+            proc_f.unlink()
 
 def test_dataset_b_employees():
     """Test 3 — Dataset B (Employees CSV with leading zeros in identifier)"""
@@ -126,6 +132,9 @@ def test_dataset_b_employees():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        proc_f = backend_dir / "uploads" / "processed" / "ds_b.csv"
+        if proc_f.exists():
+            proc_f.unlink()
 
 def test_dataset_c_products():
     """Test 4 — Dataset C (Products CSV with boolean and text)"""
@@ -143,6 +152,9 @@ def test_dataset_c_products():
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        proc_f = backend_dir / "uploads" / "processed" / "ds_c.csv"
+        if proc_f.exists():
+            proc_f.unlink()
 
 def test_pipeline_error_handling():
     """Test 5 — Error handling across pipeline stages"""
