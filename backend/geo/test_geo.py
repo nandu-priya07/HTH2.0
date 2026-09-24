@@ -1,9 +1,12 @@
 import pandas as pd
+import json
+import os
+import tempfile
 from geo import run_geo_analysis
 from geo.entity_discovery import discover_geo_profile
 from geo.hierarchy_discovery import discover_hierarchy
 from geo.metric_synthesis import resolve_metric
-from geo.geo_resolver import GeoResolver
+from geo.geo_resolver import GeoBoundaryProvider, GeoResolver
 from analyst.models import LLMResponse, QuerySpec
 from analyst.query_processor import _geo_query_from_grouped_plan, _fallback_geo_query
 
@@ -20,6 +23,43 @@ def test_schema_agnostic_hierarchy():
     profile=discover_geo_profile(df)
     hierarchy=discover_hierarchy(df,profile)
     assert [x["column"] for x in hierarchy] == ["Country","Province","Municipality"]
+
+
+def test_hierarchy_parent_links_and_duplicate_child_names_are_contextual():
+    df=pd.DataFrame({"Country":["India","India","USA","USA"],"Province":["Georgia","Tamil Nadu","Georgia","California"],"Municipality":["Tbilisi","Chennai","Atlanta","Los Angeles"],"Quantity":[1,2,3,4],"Price":[10,10,10,10]})
+    hierarchy=discover_hierarchy(df)
+    assert [x["column"] for x in hierarchy] == ["Country","Province","Municipality"]
+    assert hierarchy[1]["parent_column"] == "Country"
+    result=run_geo_analysis(df,{"analysis_type":"geographic_analysis","geography":{"column":"Province","level":"admin1"},"geographic_dimension":"Province","metric":{"column":"Revenue","type":"derived","aggregation":"sum"},"filters":[{"column":"Country","operator":"=","value":"India"}]})
+    assert result["success"]
+    assert {row["location"] for row in result["results"]} == {"India — Georgia","India — Tamil Nadu"}
+    assert all(row["parents"] == {"Country":"India"} for row in result["results"])
+
+
+def test_comparison_across_parents_keeps_names_and_ranks_scoped():
+    df=pd.DataFrame({"Country":["India","USA","India","USA"],"Province":["Georgia","Georgia","Tamil Nadu","California"],"Sales":[100,90,50,70]})
+    result=run_geo_analysis(df,{"analysis_type":"geographic_analysis","geographic_dimension":"Province","metric":{"column":"Sales","aggregation":"sum"}})
+    georgias=[row for row in result["results"] if row["entity"]=="Georgia"]
+    assert {row["location"] for row in georgias} == {"India — Georgia","USA — Georgia"}
+    assert all(row["rank"]==1 for row in georgias)
+    assert {row["share"] for row in georgias} == {round(100/150,6),round(90/160,6)}
+
+
+def test_geography_parent_becomes_validated_filter():
+    df=pd.DataFrame({"Country":["India","USA","USA"],"Province":["Tamil Nadu","California","Texas"],"Sales":[1,2,3]})
+    result=run_geo_analysis(df,{"analysis_type":"geographic_analysis","geography":{"level":"admin1","column":"Province","parent":{"column":"Country","value":"USA"}},"geographic_dimension":"Province","metric":{"column":"Sales","aggregation":"sum"}})
+    assert result["success"]
+    assert {row["location"] for row in result["results"]} == {"USA — California","USA — Texas"}
+    assert result["evidence"]["filters"] == [{"column":"Country","operator":"=","value":"USA"}]
+
+
+def test_country_only_hierarchy_has_no_invented_child_level():
+    df=pd.DataFrame({"Country":["India","USA"],"Sales":[3,4]})
+    hierarchy=discover_hierarchy(df)
+    assert [item["column"] for item in hierarchy] == ["Country"]
+    result=run_geo_analysis(df,{"analysis_type":"geographic_analysis","geographic_dimension":"Country","metric":{"column":"Sales","aggregation":"sum"}})
+    assert result["success"] and result["map"]["type"] == "choropleth"
+    assert all(row["child_count"] == 0 for row in result["results"])
 
 
 def test_anomaly_baseline_is_data_driven_and_unresolved_places_stay_ranked():
@@ -76,6 +116,40 @@ def test_country_geometry_resolution_never_invents_dataset_locations():
     resolved, missing=GeoResolver().resolve_geometry_names(["United Kingdom","Germany","NOT A COUNTRY"])
     assert "United Kingdom" in resolved and "Germany" in resolved
     assert "NOT A COUNTRY" not in resolved and missing == 1
+
+
+def test_admin_boundary_join_uses_parent_context_and_real_feature():
+    feature=lambda name,country: {"type":"Feature","properties":{"NAME_1":name,"NAME_0":country},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}
+    with tempfile.NamedTemporaryFile(mode="w",suffix=".geojson",encoding="utf-8",delete=False) as f:
+        json.dump({"type":"FeatureCollection","features":[feature("Georgia","India"),feature("Georgia","United States of America"),feature("Tamil Nadu","India")]},f)
+        path=f.name
+    prior=os.environ.get("QUERYLENS_ADMIN_BOUNDARIES_GEOJSON")
+    try:
+        os.environ["QUERYLENS_ADMIN_BOUNDARIES_GEOJSON"]=path
+        resolved, boundaries, missing=GeoResolver().resolve_admin_boundaries(["Georgia"],"administrative_area_level_1",{"Country":"India"})
+        assert missing == 0 and len(boundaries) == 1
+        assert resolved["Georgia"]["parent_name"] == "India"
+        us=GeoBoundaryProvider().resolve_boundary(entity_type="state",name="Georgia",parent_country="USA")
+        assert us and us["properties"]["NAME_0"] == "United States of America"
+        india=GeoBoundaryProvider().resolve_boundary(entity_type="state",name="Tamil Nadu State",parent_name="India")
+        assert india and india["properties"]["querylens_name"] == "Tamil Nadu State"
+    finally:
+        if prior is None: os.environ.pop("QUERYLENS_ADMIN_BOUNDARIES_GEOJSON",None)
+        else: os.environ["QUERYLENS_ADMIN_BOUNDARIES_GEOJSON"]=prior
+        os.unlink(path)
+
+
+def test_bundled_real_admin1_boundaries_resolve_india_and_us():
+    df=pd.DataFrame({
+        "Country":["India","India","India","USA","USA"],
+        "State":["Maharashtra","Tamil Nadu","Karnataka","California","Texas"],
+        "Quantity":[34,20,25,40,30],
+    })
+    for country, states in (("India",{"Maharashtra","Tamil Nadu","Karnataka"}),("USA",{"California","Texas"})):
+        outcome=run_geo_analysis(df,{"analysis_type":"geographic_analysis","geography":{"column":"State","parent":{"column":"Country","value":country}},"geographic_dimension":"State","metric":{"column":"Quantity","aggregation":"sum"}})
+        assert outcome["success"] and outcome["map"]["boundary_status"]=="available"
+        assert {feature["properties"]["querylens_name"] for feature in outcome["map"]["boundaries"]["features"]} == states
+        assert all(feature["geometry"]["type"] in ("Polygon","MultiPolygon") for feature in outcome["map"]["boundaries"]["features"])
 
 
 def test_llm_grouped_plan_normalizes_to_derived_geo_metric():

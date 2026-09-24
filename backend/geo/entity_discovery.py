@@ -3,7 +3,7 @@ import pandas as pd
 
 _HINTS = {
     "country": ("country", "nation"), "state": ("state", "province", "territory"),
-    "city": ("city", "town", "municipality"), "region": ("region", "district", "area", "zone"),
+    "district": ("county", "district"), "city": ("city", "town", "municipality", "village"), "region": ("region", "area", "zone"),
     "postal_code": ("postal", "zip", "postcode")
 }
 
