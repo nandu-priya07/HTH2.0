@@ -5,3 +5,5 @@ pandas
 openpyxl
 xlrd
 httpx
+sentence-transformers
+duckdb
