@@ -34,7 +34,7 @@ class Conversation(BaseModel):
 class Message(BaseModel):
     """
     Individual message in a conversation.
-    Supports storing unstructured text as well as structured analytical results and visualization metadata.
+    Supports storing unstructured text as well as structured analytical results, query_spec, intent, and visualization metadata.
     """
     id: str
     conversation_id: str
@@ -42,6 +42,9 @@ class Message(BaseModel):
     content: str
     result_json: Optional[Dict[str, Any]] = None  # Structured analytical results (table, scalar, scalars, list)
     visualization_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None  # Chart / KPI configuration
+    intent: Optional[Dict[str, Any]] = None
+    query_spec: Optional[Dict[str, Any]] = None
+    file_id: Optional[str] = None
     created_at: str = Field(default_factory=utc_now_iso)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -62,6 +65,21 @@ class UpdateConversationRequest(BaseModel):
     dataset_id: Optional[str] = None
 
 
+class FileMetadataResponse(BaseModel):
+    file_id: str
+    filename: str
+    stored_filename: Optional[str] = None
+    processed_filename: Optional[str] = None
+    storage_path: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = 0
+    schema: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    profile: Optional[Dict[str, Any]] = None
+    cleaning_report: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
+
+
 class ConversationResponse(BaseModel):
     id: str
     title: str
@@ -70,6 +88,17 @@ class ConversationResponse(BaseModel):
     updated_at: str
     message_count: Optional[int] = None
     last_message: Optional[str] = None
+    files: Optional[List[Dict[str, Any]]] = None
+
+
+class ConversationDetailResponse(BaseModel):
+    chat_id: str
+    title: str
+    dataset_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+    files: List[Dict[str, Any]] = []
+    messages: List[Dict[str, Any]] = []
 
 
 class MessageResponse(BaseModel):
@@ -79,6 +108,9 @@ class MessageResponse(BaseModel):
     content: str
     result: Optional[Dict[str, Any]] = None
     visualization: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
+    intent: Optional[Dict[str, Any]] = None
+    query_spec: Optional[Dict[str, Any]] = None
+    file_id: Optional[str] = None
     created_at: str
 
 
@@ -87,3 +119,4 @@ class ChatResponse(BaseModel):
     user_message: MessageResponse
     assistant_message: MessageResponse
     dataset_id: Optional[str] = None
+

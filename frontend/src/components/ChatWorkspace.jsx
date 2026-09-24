@@ -88,14 +88,15 @@ export default function ChatWorkspace() {
       sender: isAi ? 'ai' : 'user',
       text: msg.content,
       result: msg.result,
+      decision_analysis: res.decision_analysis,
       table: res.table || (res.tables && res.tables[0]),
       tables: res.tables,
       scalar: res.scalar || (res.scalars && res.scalars[0]),
       scalars: res.scalars,
       list: res.list,
       metadata: res.metadata,
-      visualization: Array.isArray(vis) ? vis[0] : vis,
-      visualizations: Array.isArray(vis) ? vis : (vis ? [vis] : []),
+      visualization: Array.isArray(vis) ? vis[0] : (vis?.visualization_type === 'decision_boundary' ? { ...vis, visualization_type: 'line' } : vis),
+      visualizations: Array.isArray(vis) ? vis.map((item) => item.visualization_type === 'decision_boundary' ? { ...item, visualization_type: 'line' } : item) : (vis ? [{ ...vis, visualization_type: vis.visualization_type === 'decision_boundary' ? 'line' : vis.visualization_type }] : []),
       created_at: msg.created_at
     }
   }
@@ -253,12 +254,13 @@ export default function ChatWorkspace() {
         text: data.text,
         status: data.status,
         result_type: data.result_type || data.type,
+        decision_analysis: data.decision_analysis,
         scalar: data.scalar,
         table: data.table,
         options: data.options,
         query_spec: data.query_spec || data.query,
-        visualization: data.visualization,
-        visualizations: data.visualizations,
+        visualization: data.visualization?.visualization_type === 'decision_boundary' ? { ...data.visualization, visualization_type: 'line' } : data.visualization,
+        visualizations: data.visualizations?.map((item) => item.visualization_type === 'decision_boundary' ? { ...item, visualization_type: 'line' } : item),
         metadata: data.metadata,
         error: data.error
       }

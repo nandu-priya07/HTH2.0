@@ -41,11 +41,14 @@ def save_dataset_meta(dataset_id: str, meta: Dict[str, Any]) -> None:
         logger.warning(f"Failed to write meta.json for {dataset_id}: {e}")
 
 
-def get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+CHATS_DIR = BASE_DIR / "storage" / "chats"
+
+
+def get_or_load_dataset(dataset_id: Optional[str] = None, chat_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Retrieves dataset from in-memory registry, or loads processed CSV from disk if available.
+    Retrieves dataset from in-memory registry, chat storage files, or processed directory on disk.
     Returns None if dataset_id is None, empty, or not found.
-    Never guesses or falls back to a global dataset when dataset_id is None.
+    Never guesses or falls back to a global dataset across chats when dataset_id is None.
     """
     if not dataset_id or not str(dataset_id).strip():
         return None
@@ -56,21 +59,50 @@ def get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, 
     if clean_id in DATASET_REGISTRY:
         return DATASET_REGISTRY[clean_id]
 
-    # 2. Check disk for processed CSV files
-    if PROCESSED_DIR.exists():
-        target_csv = PROCESSED_DIR / f"{clean_id}.csv"
-        if target_csv.exists():
-            try:
-                df = pd.read_csv(target_csv)
-                schema = infer_schema(df)
-                profile = profile_dataset(df, schema)
+    # 2. Check chat-scoped storage files
+    target_csv = None
+    original_filename = f"{clean_id}.csv"
+    file_type = "csv"
 
-                # Recover original filename & metadata
-                original_filename = f"{clean_id}.csv"
-                file_size = target_csv.stat().st_size
-                file_type = "csv"
+    if chat_id:
+        chat_csv = CHATS_DIR / str(chat_id) / "files" / f"{clean_id}.csv"
+        if chat_csv.exists():
+            target_csv = chat_csv
 
-                # Check sidecar meta.json first
+    if not target_csv and CHATS_DIR.exists():
+        # Search all chat folders for this file_id
+        matches = list(CHATS_DIR.glob(f"*/files/{clean_id}.csv"))
+        if matches:
+            target_csv = matches[0]
+
+    if not target_csv and PROCESSED_DIR.exists():
+        legacy_csv = PROCESSED_DIR / f"{clean_id}.csv"
+        if legacy_csv.exists():
+            target_csv = legacy_csv
+
+    if target_csv and target_csv.exists():
+        try:
+            df = pd.read_csv(target_csv)
+            schema = infer_schema(df)
+            profile = profile_dataset(df, schema)
+            file_size = target_csv.stat().st_size
+
+            # Look for conversation.json or sidecar meta to recover original filename
+            chat_folder = target_csv.parent.parent
+            conv_json_path = chat_folder / "conversation.json"
+            if conv_json_path.exists():
+                try:
+                    with open(conv_json_path, "r", encoding="utf-8") as cf:
+                        cdata = json.load(cf)
+                        for f_item in cdata.get("files", []):
+                            if f_item.get("file_id") == clean_id:
+                                original_filename = f_item.get("filename") or original_filename
+                                file_type = f_item.get("file_type") or file_type
+                                file_size = f_item.get("file_size") or file_size
+                                break
+                except Exception:
+                    pass
+            else:
                 meta_json_path = PROCESSED_DIR / f"{clean_id}.meta.json"
                 if meta_json_path.exists():
                     try:
@@ -81,56 +113,49 @@ def get_or_load_dataset(dataset_id: Optional[str] = None) -> Optional[Dict[str, 
                             file_size = meta_data.get("file_size") or file_size
                     except Exception:
                         pass
-                elif RAW_DIR.exists():
-                    raw_matches = list(RAW_DIR.glob(f"{clean_id}.*"))
-                    if raw_matches:
-                        raw_file = raw_matches[0]
-                        file_type = raw_file.suffix.lstrip(".").lower()
-                        file_size = raw_file.stat().st_size
-                        original_filename = raw_file.name
 
-                ds_entry = {
+            ds_entry = {
+                "dataset_id": clean_id,
+                "filename": original_filename,
+                "stored_filename": f"{clean_id}.{file_type}",
+                "processed_filename": f"{clean_id}.csv",
+                "file_path": str(target_csv),
+                "file_type": file_type,
+                "file_size": file_size,
+                "status": "processed",
+                "data": df,
+                "metadata": {
                     "dataset_id": clean_id,
-                    "filename": original_filename,
-                    "stored_filename": f"{clean_id}.{file_type}",
+                    "original_filename": original_filename,
                     "processed_filename": f"{clean_id}.csv",
-                    "file_path": str(target_csv),
-                    "file_type": file_type,
-                    "file_size": file_size,
-                    "status": "processed",
-                    "data": df,
-                    "metadata": {
-                        "dataset_id": clean_id,
-                        "original_filename": original_filename,
-                        "processed_filename": f"{clean_id}.csv",
-                        "row_count": len(df),
-                        "column_count": len(df.columns),
-                        "rows": len(df),
-                        "columns": len(df.columns)
-                    },
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "rows": len(df),
+                    "columns": len(df.columns)
+                },
+                "schema": schema,
+                "profile": profile,
+                "cleaning_report": {
+                    "clean_dataset": True,
+                    "rows_removed": 0
+                },
+                "result": {
+                    "dataset_id": clean_id,
+                    "original_filename": original_filename,
+                    "processed_filename": f"{clean_id}.csv",
                     "schema": schema,
                     "profile": profile,
-                    "cleaning_report": {
-                        "clean_dataset": True,
-                        "rows_removed": 0
-                    },
-                    "result": {
-                        "dataset_id": clean_id,
-                        "original_filename": original_filename,
-                        "processed_filename": f"{clean_id}.csv",
-                        "schema": schema,
-                        "profile": profile,
-                        "metadata": {
-                            "rows": len(df),
-                            "columns": len(df.columns)
-                        }
+                    "metadata": {
+                        "rows": len(df),
+                        "columns": len(df.columns)
                     }
                 }
-                DATASET_REGISTRY[clean_id] = ds_entry
-                return ds_entry
-            except Exception as e:
-                logger.error(f"Failed to auto-load processed dataset {clean_id} from disk: {e}")
-                return None
+            }
+            DATASET_REGISTRY[clean_id] = ds_entry
+            return ds_entry
+        except Exception as e:
+            logger.error(f"Failed to auto-load processed dataset {clean_id} from disk: {e}")
+            return None
 
     return None
 

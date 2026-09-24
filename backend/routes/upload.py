@@ -1,9 +1,10 @@
 import os
 import uuid
+import shutil
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, File, Form, UploadFile, status
+from typing import Dict, Any, Optional, List
+from fastapi import APIRouter, File, Form, UploadFile, status, HTTPException
 from fastapi.responses import JSONResponse
 
 from file_processing.pipeline import process_file, FileProcessingError
@@ -19,15 +20,102 @@ from storage.dataset_manager import (
     generate_suggestions
 )
 from chat import get_chat_service
+from chat.models import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["upload"])
+router = APIRouter(tags=["upload"])
 
-UPLOAD_DIR = RAW_DIR
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+STORAGE_CHATS_DIR = BASE_DIR / "storage" / "chats"
+UPLOAD_DIR = RAW_DIR
 
 
+def process_and_store_chat_file(
+    content: bytes,
+    filename: str,
+    chat_id: str
+) -> Tuple_File_Meta_Res:
+    """
+    Saves raw and cleaned dataset files inside storage/chats/{chat_id}/files/,
+    indexes schema, and registers file metadata in conversation.json.
+    """
+    chat_dir = STORAGE_CHATS_DIR / chat_id / "files"
+    chat_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = os.path.splitext(filename)[1].lower()
+    clean_ext = ext.lstrip(".")
+    file_id = f"file_{uuid.uuid4().hex[:8]}"
+
+    raw_path = chat_dir / f"{file_id}.{clean_ext}"
+    with open(raw_path, "wb") as f:
+        f.write(content)
+
+    process_result = process_file(
+        file_path=raw_path,
+        dataset_id=file_id,
+        original_filename=filename,
+        processed_dir=chat_dir
+    )
+
+    processed_path = chat_dir / process_result["processed_filename"]
+
+    # Also mirror processed file into PROCESSED_DIR for legacy dataset compatibility
+    try:
+        if PROCESSED_DIR.exists():
+            shutil.copy2(processed_path, PROCESSED_DIR / f"{file_id}.csv")
+    except Exception as e:
+        logger.warning(f"Failed to mirror processed CSV to PROCESSED_DIR: {e}")
+
+    file_meta = {
+        "file_id": file_id,
+        "filename": filename,
+        "stored_filename": f"{file_id}.{clean_ext}",
+        "processed_filename": process_result["processed_filename"],
+        "storage_path": str(raw_path),
+        "processed_path": str(processed_path),
+        "file_type": clean_ext,
+        "file_size": len(content),
+        "schema": process_result["schema"],
+        "metadata": process_result["metadata"],
+        "profile": process_result["profile"],
+        "cleaning_report": process_result["cleaning_report"],
+        "created_at": utc_now_iso()
+    }
+
+    # Register in conversation.json
+    service = get_chat_service()
+    service.add_file(chat_id, file_meta)
+
+    # Register in memory dataset manager cache
+    dataset_entry = {
+        "dataset_id": file_id,
+        "filename": filename,
+        "stored_filename": f"{file_id}.{clean_ext}",
+        "processed_filename": process_result["processed_filename"],
+        "file_path": str(processed_path),
+        "file_type": clean_ext,
+        "file_size": len(content),
+        "status": "processed",
+        "result": process_result,
+        "data": process_result["data"],
+        "metadata": process_result["metadata"],
+        "schema": process_result["schema"],
+        "profile": process_result["profile"],
+        "cleaning_report": process_result["cleaning_report"]
+    }
+    register_dataset(file_id, dataset_entry)
+    save_dataset_meta(file_id, {
+        "dataset_id": file_id,
+        "filename": filename,
+        "file_type": clean_ext,
+        "file_size": len(content)
+    })
+
+    return file_meta, process_result
+
+
+@router.get("/api/datasets")
 @router.get("/datasets")
 async def get_datasets_list():
     """
@@ -51,16 +139,110 @@ async def get_datasets_list():
         )
 
 
-@router.post("/upload")
+@router.post("/chats/{chat_id}/files")
+@router.post("/api/chats/{chat_id}/files")
+@router.post("/api/conversations/{chat_id}/files")
+async def upload_file_to_chat(
+    chat_id: str,
+    file: UploadFile = File(...)
+):
+    """
+    POST /chats/{chat_id}/files
+    Uploads a file to a specific chat directory storage/chats/{chat_id}/files/.
+    Extracts schema, cleans dataset, updates conversation.json, and returns file metadata.
+    """
+    if not file or not file.filename or file.filename.strip() == "":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded")
+
+    filename = file.filename
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Only CSV and Excel files are allowed."
+        )
+
+    try:
+        content = await file.read()
+        if len(content) == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to read uploaded file: {str(e)}")
+
+    service = get_chat_service()
+    conv = service.get_conversation(chat_id)
+    if not conv:
+        conv = service.create_conversation(conversation_id=chat_id, title="New Chat")
+
+    try:
+        file_meta, process_result = process_and_store_chat_file(content, filename, chat_id)
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "chat_id": chat_id,
+                "file_id": file_meta["file_id"],
+                "dataset_id": file_meta["file_id"],
+                "filename": filename,
+                "file_type": file_meta["file_type"],
+                "file_size": file_meta["file_size"],
+                "storage_path": file_meta["storage_path"],
+                "schema": file_meta["schema"],
+                "metadata": file_meta["metadata"],
+                "profile": file_meta["profile"],
+                "cleaning_report": file_meta["cleaning_report"]
+            }
+        )
+    except FileProcessingError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Dataset processing error during [{e.stage}]: {e.error}")
+    except Exception as e:
+        logger.error(f"Error processing file upload for chat {chat_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal error processing dataset file")
+
+
+@router.get("/chats/{chat_id}/files")
+@router.get("/api/chats/{chat_id}/files")
+@router.get("/api/conversations/{chat_id}/files")
+async def get_chat_files(chat_id: str):
+    """
+    GET /chats/{chat_id}/files
+    Retrieves all files associated with a specific chat.
+    """
+    service = get_chat_service()
+    conv = service.get_conversation(chat_id)
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat '{chat_id}' not found")
+
+    files = service.get_files(chat_id)
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"chat_id": chat_id, "files": files})
+
+
+@router.delete("/chats/{chat_id}/files/{file_id}")
+@router.delete("/api/chats/{chat_id}/files/{file_id}")
+@router.delete("/api/conversations/{chat_id}/files/{file_id}")
+async def delete_chat_file(chat_id: str, file_id: str):
+    """
+    DELETE /chats/{chat_id}/files/{file_id}
+    Removes a file reference from conversation.json and deletes files from disk.
+    """
+    service = get_chat_service()
+    deleted = service.delete_file(chat_id, file_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File '{file_id}' not found in chat '{chat_id}'")
+    return {"success": True, "chat_id": chat_id, "file_id": file_id, "message": "File deleted"}
+
+
+@router.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(None),
     conversation_id: Optional[str] = Form(None)
 ):
     """
-    Ingests, validates, profiles, and cleans uploaded CSV/Excel files.
-    Optionally associates the new dataset with an active conversation_id.
+    Legacy API endpoint for dataset upload.
+    If conversation_id is provided, stores file inside chat directory storage/chats/{conversation_id}/files/.
     """
-    # 1. Validate file presence
     if not file or not file.filename or file.filename.strip() == "":
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -70,7 +252,6 @@ async def upload_file(
     filename = file.filename
     ext = os.path.splitext(filename)[1].lower()
 
-    # 2. Validate file extension
     if ext not in ALLOWED_EXTENSIONS:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -80,7 +261,6 @@ async def upload_file(
             }
         )
 
-    # 3. Read file contents and check for empty file
     try:
         content = await file.read()
         file_size = len(content)
@@ -96,33 +276,39 @@ async def upload_file(
             content={"success": False, "error": "Failed to read uploaded file"}
         )
 
-    # 4. Generate unique dataset_id and save raw file
-    dataset_id = str(uuid.uuid4())
-    clean_ext = ext.lstrip(".")
-    stored_filename = f"{dataset_id}.{clean_ext}"
+    service = get_chat_service()
+    cid = conversation_id
+    if not cid:
+        # Create new chat session for this file
+        title = filename.rsplit(".", 1)[0].replace("_", " ").title()
+        conv = service.create_conversation(title=title)
+        cid = conv.id
 
     try:
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        file_path = UPLOAD_DIR / stored_filename
-        with open(file_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        logger.error(f"Error writing raw file: {e}")
+        file_meta, process_result = process_and_store_chat_file(content, filename, cid)
+        file_id = file_meta["file_id"]
+        service.associate_dataset(cid, file_id)
+
         return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"success": False, "error": "Failed to save file to server storage"}
-        )
-
-    # 5. Execute 4-Stage File Processing Pipeline
-    try:
-        process_result = process_file(
-            file_path=file_path,
-            dataset_id=dataset_id,
-            original_filename=filename,
-            processed_dir=PROCESSED_DIR
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "dataset_id": file_id,
+                "file_id": file_id,
+                "conversation_id": cid,
+                "filename": filename,
+                "stored_filename": file_meta["stored_filename"],
+                "processed_filename": file_meta["processed_filename"],
+                "file_type": file_meta["file_type"],
+                "file_size": file_size,
+                "status": "processed",
+                "metadata": process_result["metadata"],
+                "schema": process_result["schema"],
+                "profile": process_result["profile"],
+                "cleaning_report": process_result["cleaning_report"]
+            }
         )
     except FileProcessingError as e:
-        logger.error(f"File processing failed for {dataset_id} at stage [{e.stage}]: {e.error}")
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={
@@ -132,72 +318,14 @@ async def upload_file(
             }
         )
     except Exception as e:
-        logger.error(f"Unhandled file processing error for {dataset_id}: {e}")
+        logger.error(f"Unhandled file processing error: {e}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "success": False,
-                "stage": "processing",
-                "error": "Internal error during dataset processing"
-            }
+            content={"success": False, "stage": "processing", "error": "Internal error during dataset processing"}
         )
 
-    # 6. Store in server-side dataset registry
-    dataset_entry = {
-        "dataset_id": dataset_id,
-        "filename": filename,
-        "stored_filename": stored_filename,
-        "processed_filename": process_result["processed_filename"],
-        "file_path": str(file_path),
-        "file_type": clean_ext,
-        "file_size": file_size,
-        "status": "processed",
-        "result": process_result,
-        "data": process_result["data"],  # Standardized pd.DataFrame held in memory
-        "metadata": process_result["metadata"],
-        "schema": process_result["schema"],
-        "profile": process_result["profile"],
-        "cleaning_report": process_result["cleaning_report"]
-    }
-    register_dataset(dataset_id, dataset_entry)
-    save_dataset_meta(dataset_id, {
-        "dataset_id": dataset_id,
-        "filename": filename,
-        "stored_filename": stored_filename,
-        "processed_filename": process_result["processed_filename"],
-        "file_type": clean_ext,
-        "file_size": file_size
-    })
 
-    # 7. Associate with conversation if conversation_id was provided
-    if conversation_id:
-        try:
-            get_chat_service().associate_dataset(conversation_id, dataset_id)
-        except Exception as e:
-            logger.warning(f"Failed to associate dataset {dataset_id} with conversation {conversation_id}: {e}")
-
-    # 8. Return JSON response
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={
-            "success": True,
-            "dataset_id": dataset_id,
-            "conversation_id": conversation_id,
-            "filename": filename,
-            "stored_filename": stored_filename,
-            "processed_filename": process_result["processed_filename"],
-            "file_type": clean_ext,
-            "file_size": file_size,
-            "status": "processed",
-            "metadata": process_result["metadata"],
-            "schema": process_result["schema"],
-            "profile": process_result["profile"],
-            "cleaning_report": process_result["cleaning_report"]
-        }
-    )
-
-
-@router.get("/dataset/{dataset_id}")
+@router.get("/api/dataset/{dataset_id}")
 async def get_dataset_info(dataset_id: str):
     """
     Returns full metadata, schema, and profile for a specific dataset.
@@ -230,7 +358,7 @@ async def get_dataset_info(dataset_id: str):
     )
 
 
-@router.get("/dataset/{dataset_id}/suggestions")
+@router.get("/api/dataset/{dataset_id}/suggestions")
 async def get_dataset_suggestions_endpoint(dataset_id: str):
     """
     Generates dynamic analytical question suggestions based on the dataset's schema and column types.

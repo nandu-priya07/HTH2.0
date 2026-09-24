@@ -61,7 +61,10 @@ class BaseChatRepository(ABC):
         content: str,
         result_json: Optional[Dict[str, Any]] = None,
         visualization_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        intent: Optional[Dict[str, Any]] = None,
+        query_spec: Optional[Dict[str, Any]] = None,
+        file_id: Optional[str] = None
     ) -> Message:
         """Create and persist a message in a conversation."""
         pass

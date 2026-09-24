@@ -1,0 +1,2 @@
+def select_decision_visualization(metric, impact):
+    return {"visualization_type": "decision_boundary", "type": "line", "reason": "Scenario outcome varies with intervention percentage", "x_key": "increase_percent", "y_key": "projected_value", "label_key": "increase_percent", "value_key": "projected_value", "data": [{"increase_percent": s["increase_percent"], "projected_value": s["projected_value"], "boundary": s.get("target_reached")} for s in impact["scenarios"]]}

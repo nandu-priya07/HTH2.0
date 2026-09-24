@@ -11,8 +11,11 @@ frontend/dist/
 !.env.example
 
 backend/storage/datasets/*
+backend/storage/chats/
 backend/storage/uploads/*
 backend/storage/temp/*
+backend/uploads/
+backend/data/
 
 .vscode/
 .idea/

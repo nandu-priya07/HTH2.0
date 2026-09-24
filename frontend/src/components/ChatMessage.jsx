@@ -22,7 +22,8 @@ export default function ChatMessage({ message, onSelectOption }) {
     visualization,
     visualizations,
     isLoading,
-    error
+    error,
+    decision_analysis
   } = message
 
   const [showSpec, setShowSpec] = useState(false)
@@ -90,6 +91,36 @@ export default function ChatMessage({ message, onSelectOption }) {
                     <p key={i}>{para}</p>
                   ))}
                 </div>
+              )}
+
+              {decision_analysis && (
+                <section className="decision-analysis-card" aria-label="Decision analysis">
+                  <h3>🎯 Decision Analysis</h3>
+                  <p className="decision-question">{decision_analysis.user_question}</p>
+                  <h4>Relevant factors</h4>
+                  <ul>{(decision_analysis.factor_discovery?.factors || []).slice(0, 6).map((factor) => (
+                    <li key={factor.name}><strong>{factor.name}</strong> · {factor.relationship} · strength {Number(factor.strength).toFixed(2)}</li>
+                  ))}</ul>
+                  <h4>Scenario analysis</h4>
+                  <div className="decision-scenarios">
+                    {(decision_analysis.scenario_analysis?.scenarios || []).map((scenario) => (
+                      <div key={scenario.increase_percent} className={scenario.target_reached ? 'decision-scenario boundary' : 'decision-scenario'}>
+                        <strong>{scenario.increase_percent}%</strong><span>{Number(scenario.projected_value).toLocaleString()}</span>
+                        {scenario.target_reached && <span>Boundary</span>}
+                        <small>Incremental benefit: {Number(scenario.incremental_benefit).toLocaleString()}</small>
+                      </div>
+                    ))}
+                  </div>
+                  <h4>Decision boundary</h4>
+                  <p>{decision_analysis.boundary?.boundary_value == null ? decision_analysis.boundary?.reason : `${decision_analysis.boundary.boundary_value}% — ${decision_analysis.boundary.reason}`}</p>
+                  <h4>Counter-tests</h4>
+                  {decision_analysis.counter_tests?.length ? <ul>{decision_analysis.counter_tests.map((test, index) => <li key={`${test.test}-${index}`}>{test.factor || test.test}: {test.result}</li>)}</ul> : <p>No eligible counter-test was supported by the available columns and sample sizes.</p>}
+                  <details><summary>Evidence and calculation trace</summary>
+                    <p>{decision_analysis.evidence?.interpretation}</p>
+                    <p>Method: {decision_analysis.scenario_analysis?.method}</p>
+                    <pre>{JSON.stringify(decision_analysis.trace, null, 2)}</pre>
+                  </details>
+                </section>
               )}
 
               {/* DYNAMIC VISUALIZATION LAYER (Chart / KPI / Table / Multi-section) */}

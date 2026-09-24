@@ -157,7 +157,10 @@ class SqliteChatRepository(BaseChatRepository):
         content: str,
         result_json: Optional[Dict[str, Any]] = None,
         visualization_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
-        message_id: Optional[str] = None
+        message_id: Optional[str] = None,
+        intent: Optional[Dict[str, Any]] = None,
+        query_spec: Optional[Dict[str, Any]] = None,
+        file_id: Optional[str] = None
     ) -> Message:
         mid = message_id or str(uuid.uuid4())
         now = utc_now_iso()
@@ -193,6 +196,9 @@ class SqliteChatRepository(BaseChatRepository):
             content=content,
             result_json=result_json,
             visualization_json=visualization_json,
+            intent=intent,
+            query_spec=query_spec,
+            file_id=file_id,
             created_at=now
         )
 

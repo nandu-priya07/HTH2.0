@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Optional, Union
 
 from .models import Conversation, Message
 from .repository import BaseChatRepository
+from .json_repository import JsonChatRepository
 from .sqlite_repository import SqliteChatRepository
+from .context_resolver import ContextResolver
 
 logger = logging.getLogger(__name__)
 
@@ -64,20 +66,23 @@ def generate_deterministic_title(first_message: str) -> str:
 
 class ChatService:
     """
-    High-level service coordinating conversation management, messaging, and context history.
+    High-level service coordinating conversation management, chat-scoped file storage, messaging, and context resolution.
     """
 
     def __init__(self, repository: Optional[BaseChatRepository] = None):
-        self.repository = repository or SqliteChatRepository()
+        self.repository = repository or JsonChatRepository()
+        self.context_resolver = ContextResolver()
 
     def create_conversation(
         self,
         title: Optional[str] = "New Chat",
-        dataset_id: Optional[str] = None
+        dataset_id: Optional[str] = None,
+        conversation_id: Optional[str] = None
     ) -> Conversation:
         return self.repository.create_conversation(
             title=title or "New Chat",
-            dataset_id=dataset_id
+            dataset_id=dataset_id,
+            conversation_id=conversation_id
         )
 
     def get_conversation(self, conversation_id: str) -> Optional[Conversation]:
@@ -108,11 +113,17 @@ class ChatService:
             dataset_id=dataset_id
         )
 
-    def add_user_message(self, conversation_id: str, content: str) -> Message:
+    def add_user_message(
+        self,
+        conversation_id: str,
+        content: str,
+        file_id: Optional[str] = None
+    ) -> Message:
         return self.repository.create_message(
             conversation_id=conversation_id,
             role="user",
-            content=content
+            content=content,
+            file_id=file_id
         )
 
     def add_assistant_message(
@@ -120,18 +131,89 @@ class ChatService:
         conversation_id: str,
         content: str,
         result_json: Optional[Dict[str, Any]] = None,
-        visualization_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None
+        visualization_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        intent: Optional[Dict[str, Any]] = None,
+        query_spec: Optional[Dict[str, Any]] = None,
+        file_id: Optional[str] = None
     ) -> Message:
         return self.repository.create_message(
             conversation_id=conversation_id,
             role="assistant",
             content=content,
             result_json=result_json,
-            visualization_json=visualization_json
+            visualization_json=visualization_json,
+            intent=intent,
+            query_spec=query_spec,
+            file_id=file_id
         )
 
     def get_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[Message]:
         return self.repository.get_messages(conversation_id, limit=limit)
+
+    def add_file(self, conversation_id: str, file_meta: Dict[str, Any]) -> Dict[str, Any]:
+        """Adds file metadata to chat storage."""
+        if hasattr(self.repository, "add_file"):
+            return self.repository.add_file(conversation_id, file_meta)
+        return file_meta
+
+    def get_files(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """Gets all files associated with a specific chat_id."""
+        if hasattr(self.repository, "get_files"):
+            return self.repository.get_files(conversation_id)
+        return []
+
+    def delete_file(self, conversation_id: str, file_id: str) -> bool:
+        """Deletes a file entry and raw/processed files from chat storage."""
+        if hasattr(self.repository, "delete_file"):
+            return self.repository.delete_file(conversation_id, file_id)
+        return False
+
+    def get_chat_detail(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves full chat state including files and messages from conversation.json.
+        """
+        if hasattr(self.repository, "get_chat_json"):
+            raw_data = self.repository.get_chat_json(conversation_id)
+            if raw_data:
+                return {
+                    "chat_id": raw_data.get("chat_id") or conversation_id,
+                    "title": raw_data.get("title", "New Chat"),
+                    "dataset_id": raw_data.get("dataset_id"),
+                    "created_at": raw_data.get("created_at"),
+                    "updated_at": raw_data.get("updated_at"),
+                    "files": raw_data.get("files", []),
+                    "messages": raw_data.get("messages", [])
+                }
+        conv = self.get_conversation(conversation_id)
+        if not conv:
+            return None
+        messages = [m.to_dict() for m in self.get_messages(conversation_id)]
+        return {
+            "chat_id": conv.id,
+            "title": conv.title,
+            "dataset_id": conv.dataset_id,
+            "created_at": conv.created_at,
+            "updated_at": conv.updated_at,
+            "files": [],
+            "messages": messages
+        }
+
+    def resolve_query_context(
+        self,
+        conversation_id: str,
+        user_query: str
+    ):
+        """
+        Invokes ContextResolver to handle follow-up query context and compact LLM payload.
+        """
+        files = self.get_files(conversation_id)
+        messages_raw = [m.to_dict() for m in self.get_messages(conversation_id)]
+        return self.context_resolver.resolve_context(
+            chat_id=conversation_id,
+            current_query=user_query,
+            messages=messages_raw,
+            files=files
+        )
 
     def get_context_history(
         self,
@@ -162,7 +244,6 @@ class ChatService:
         and auto-generates a useful title on the first user message.
         """
         conversation = None
-        is_new = False
 
         if conversation_id:
             conversation = self.get_conversation(conversation_id)
@@ -172,9 +253,9 @@ class ChatService:
             initial_title = generate_deterministic_title(user_message_text)
             conversation = self.create_conversation(
                 title=initial_title,
-                dataset_id=dataset_id
+                dataset_id=dataset_id,
+                conversation_id=conversation_id
             )
-            is_new = True
         else:
             # Check if conversation needs title update or dataset update
             updates = {}
@@ -193,3 +274,4 @@ class ChatService:
                     conversation = updated_conv
 
         return conversation
+

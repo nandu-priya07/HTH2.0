@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import re
 import numpy as np
 import pandas as pd
+import duckdb
 
 from .models import QuerySpec, QueryResult, ResponseType
 from .validator import validate_query_spec, validate_queries
