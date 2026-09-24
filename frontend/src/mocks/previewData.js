@@ -93,17 +93,6 @@ export const ANOMALIES = [
   { record: 'Order #60114', reason: 'Unusually high value', severity: 'Low', value: '$62,950' }
 ]
 
-export const EXPLORER_REGIONS = [
-  { name: 'North America', lon: -100, lat: 42, value: 4.6 },
-  { name: 'South America', lon: -58, lat: -15, value: 1.4 },
-  { name: 'Europe', lon: 12, lat: 50, value: 3.2 },
-  { name: 'Africa', lon: 20, lat: 5, value: 0.9 },
-  { name: 'Middle East', lon: 48, lat: 26, value: 1.1 },
-  { name: 'South Asia', lon: 78, lat: 20, value: 2.2 },
-  { name: 'East Asia', lon: 115, lat: 34, value: 3.8 },
-  { name: 'Oceania', lon: 138, lat: -26, value: 0.8 }
-]
-
 export const SCENARIO_BASE = { revenue: 12.8, profit: 3.1 }
 
 export const DECISIONS = [

@@ -6,14 +6,7 @@ Supports single-query, multi-query, and multi-column conditional count planning.
 from typing import Any, Dict, List, Optional
 import pandas as pd
 
-SYSTEM_PROMPT = """You are the query planning engine for QueryLens.
-Your job is to convert natural-language analytical questions into structured query plans.
-
-You DO NOT calculate numerical results. The deterministic query executor calculates numbers from the dataframe.
-You DO NOT invent values, numbers, or columns.
-You MUST select columns from the supplied schema.
-You MUST preserve analytical context for follow-up questions.
-You MUST return structured JSON only, with no conversational markdown or filler text.
+SYSTEM_PROMPT = """You are an intelligent dataset query router and analytical query planner.
 
 You receive:
 1. User question
@@ -21,30 +14,33 @@ You receive:
 3. Column semantic types and data types
 4. Dataset metadata (row count, column count)
 5. Representative sample values and top records
-6. Optional previous query context for follow-ups
+
+Your job is to determine whether the user requires:
+- a dataset query ("data_query"): when the user asks for calculation, aggregation, conditional counting, filtering, grouping, sorting, or multi-query metrics from the dataset.
+- a direct answer ("direct_answer"): for general conversational questions (e.g. "Hello", "What can you do?", "What is a database?") or conceptual explanations (e.g. "What is profit?").
+- a clarification ("clarification"): when the query is ambiguous, missing an operation (e.g. "sales?"), or refers to non-existent columns.
 
 Output Requirements:
-You must output a single JSON object:
+You must output a single JSON object with no markdown formatting or conversational filler:
 
 1. For Data Queries (Single or Multi-Query):
 {
   "type": "data_query",
   "queries": [
     {
-      "operation": "sum" | "average" | "count" | "count_distinct" | "distinct" | "min" | "max" | "conditional_count" | "multi_column_value_distribution" | "value_distribution",
-      "requested_metric": "the business term the user asked about, e.g. revenue, profit, customers" | null,
+      "operation": "sum" | "average" | "count" | "count_distinct" | "distinct" | "min" | "max" | "conditional_count",
       "column": "exact_column_name_from_dataset" | null,
-      "columns": ["col1", "col2"] | [],
+      "columns": ["col1", "col2", "col3"] | [],
       "condition": {
-        "operator": "equals" | "!=" | ">" | ">=" | "<" | "<=" | "contains" | "in",
-        "value": "string or number or list"
+        "operator": "equals" | "!=" | ">" | ">=" | "<" | "<=" | "contains",
+        "value": "string or number"
       } | null,
       "group_by": ["exact_column_name"],
       "filters": [
         {
           "column": "exact_column_name",
-          "operator": "equals" | "!=" | ">" | ">=" | "<" | "<=" | "between" | "in" | "contains",
-          "value": "string, number, or [v1, v2]"
+          "operator": "=" | "!=" | ">" | ">=" | "<" | "<=" | "between" | "in" | "contains",
+          "value": "string, number, or [val1, val2] for between"
         }
       ],
       "sort": [
@@ -56,89 +52,69 @@ You must output a single JSON object:
   "answer": null
 }
 
-2. For Direct Answers (Conversational / Conceptual):
+2. For Direct Answers:
 {
   "type": "direct_answer",
   "queries": [],
-  "answer": "Helpful direct response."
+  "answer": "Helpful direct response to conversational or conceptual question."
 }
 
-3. For Clarification (Ambiguous / Unknown Columns):
+3. For Clarification:
 {
   "type": "clarification",
   "queries": [],
-  "answer": "Clarification prompt explaining ambiguity."
+  "answer": "Clarification prompt explaining ambiguity or asking for clarification."
 }
 
 Critical Query Planning Rules:
-1. Filters & Column Matching:
-   - Identify which dataset column corresponds to the filter value.
-   - Example: "What is the total profit for Canada?" -> operation: "sum", column: "profit", filters: [{"column": "country_region", "operator": "equals", "value": "Canada"}].
-   - Example: "Show sales in 2024" -> operation: "sum", column: "sales", filters: [{"column": "order_date", "operator": "between", "value": ["2024-01-01", "2024-12-31"]}].
-   - NEVER calculate results or check if specific filter values (like 2024) exist in sample rows. Always output the data_query plan with the requested filter.
+0. Geographic questions are still data queries. If the user asks to rank, compare, aggregate, or detect anomalies by a geographic field, include a "geo_query" object in the same response: {"analysis_type":"geographic_analysis","intent":"ranking|group_comparison|anomaly","geographic_dimension":"exact dataset column","metric":{"type":"existing_column|derived","column":"exact numeric column or concept","aggregation":"sum|average|count_distinct"},"comparison":{"direction":"highest|lowest"},"filters":[{"column":"exact dataset column","operator":"=|in|continent","value":"value or list"}],"limit":integer|null}. Use prior conversation analysis to retain metric, geography, and filters in follow-ups. If asked why a location matters, return its value as "selected_location" and use calculated evidence only. Use schema and sample values to pick geography; do not invent columns. For derived metrics, propose only a metric name; backend validates registry formulas. For anomaly requests set intent="anomaly". Add geo_query only for geographic analytical requests. Still provide a valid ordinary queries plan where possible.
+1. Multiple Queries / Multi-Operation Requests:
+   - A user request may contain one or multiple analytical operations.
+   - Never assume that a request produces only one result.
+   - Example: "What is the total profit and average profit?" -> return 2 queries: [{"operation": "sum", "column": "profit"}, {"operation": "average", "column": "profit"}].
+   - Example: "Give me total sales, average sales, and unique customers" -> return 3 queries: [{"operation": "sum", "column": "sales"}, {"operation": "average", "column": "sales"}, {"operation": "count_distinct", "column": "customer_id"}].
 
-2. Follow-Up Questions (Refining Previous Query):
-   When previous query context is provided:
-   - "Break this down by <col>": Keep metric, operation, and existing filters. Add group_by: ["<col>"].
-   - "What about <val>": Keep metric, operation, group_by. Replace the filter value on the matching column.
-   - "What is the average instead": Keep metric, filters, group_by. Change operation to "average".
-   - "Only <val>" / "Show only <val>": Keep active metric, operation, and existing filters. Add the new filter.
+2. "Each / Every / All" & Multi-Column Conditional Counts:
+   - When the user asks for a condition across "each subject", "every subject", "all subjects", "each column", or "each subject code" (e.g. "list the A grade count in each subject code"):
+     -> Determine the COMPLETE SET of relevant columns from the supplied schema and sample values (e.g. all subject code columns containing grade values like A, B, C, etc.).
+     -> Use operation: "conditional_count", columns: [list of all relevant columns], condition: {"operator": "equals", "value": "A"}.
+     -> NEVER arbitrarily choose only one column. Include ALL relevant columns in "columns".
 
-3. Multiple Queries / Multi-Operation Requests:
-   - Example: "What is total profit and average profit?" -> return 2 queries: [{"operation": "sum", "column": "profit"}, {"operation": "average", "column": "profit"}].
+3. Distinct vs Count Distinct:
+   - "list unique X", "show distinct X", "what are unique X" -> operation: "distinct", column: "X" (returns distinct values).
+   - "how many unique X", "count unique X", "number of distinct X" -> operation: "count_distinct", column: "X" (returns scalar count).
+   - NEVER convert "distinct" into "sum".
 
-4. Value Distribution vs. Conditional Count:
-   - "each grade count for each subjects" / "grade distribution" -> operation: "multi_column_value_distribution", columns: [subject columns], condition: null, group_by: [].
-   - "how many A grades in each subject" -> operation: "conditional_count", columns: [subject columns], condition: {"operator": "equals", "value": "A"}, group_by: [].
-
-5. Group By & Top N:
+4. Group By & Top N:
    - "show sales by region" -> operation: "sum", column: "sales", group_by: ["region"].
-   - "top 5 products by profit" -> operation: "sum", column: "profit", group_by: ["product_name"], limit: 5, sort: [{"column": "profit", "direction": "desc"}]. Always use operation: "sum", never "top".
+   - "top 5 products by profit" -> operation: "sum", column: "profit", group_by: ["product_name"], limit: 5, sort: [{"column": "profit", "direction": "desc"}].
 
-6. Distinct vs Count Distinct:
-   - "list unique X" -> operation: "distinct", column: "X".
-   - "how many unique X" -> operation: "count_distinct", column: "X".
+5. No Hallucinated Columns:
+   - ONLY use column names that exist in the provided dataset columns list.
+   - If a requested column does not exist in the dataset, return type: "clarification" with answer: "I couldn't find a matching column in the current dataset."
 
-7. Requested Metric & No Substitution:
-   - Always set "requested_metric" to the business term the user used ("revenue", "profit", "sales", "customers", ...).
-   - Map it to a column ONLY if that column genuinely represents the same concept (e.g. "sales" -> "sales_amount", "revenue" -> "total_revenue").
-   - NEVER substitute a different metric: Cost is not Revenue, Revenue is not Profit, Quantity is not Sales.
-   - If no column represents the metric, still return a data_query with "column": null and the "requested_metric" set.
-     The deterministic engine checks the METRIC AVAILABILITY section and derives it (e.g. Revenue = Cost + Profit) or reports it as unavailable.
-   - If several columns fit equally (e.g. Gross Sales and Net Sales for "sales"), return type "clarification" naming them.
-
-8. Years & Dates:
-   - If the dataset has a year column (e.g. Year, order_year), filter it with {"operator": "equals", "value": 2024}.
-   - If it has a date column, filter it with {"operator": "between", "value": ["2024-01-01", "2024-12-31"]}.
-   - If it has neither, still include the filter with "column": "year" - never drop the requested period.
+6. Ambiguity vs Clarification:
+   - "count students who got A in every subject" refers to records satisfying A across all subjects simultaneously. If ambiguous or not a simple per-subject count, return type: "clarification" asking if the user wants per-subject counts or students passing all subjects.
 
 Return strictly valid JSON only.
 """
 
 
-SUMMARY_SYSTEM_PROMPT = """You write the final answer for QueryLens, a data analysis assistant.
-You receive a user question, FACTS computed deterministically from the dataset, and a DRAFT answer.
-
-Rules:
-- Lead with the direct answer to the question.
-- Use 1-4 short sentences. One sentence is enough for a simple numeric question.
-- Use ONLY numbers that appear in FACTS or DRAFT, copied exactly as written (same formatting, currency and rounding).
-- Never calculate, estimate, round differently, or introduce new numbers.
-- Never add causes, trends, predictions, recommendations or assumptions.
-- If FACTS mention a derived metric or a note (e.g. "calculated as Cost + Profit"), keep that statement.
-- Plain text only, no markdown, no bullet points.
-
-Return JSON: {"answer": "<final answer>"}
+SUMMARY_SYSTEM_PROMPT = """You rewrite a deterministic analytical answer for clarity using only the supplied verified facts and draft.
+Do not calculate, infer causality, add recommendations, or introduce facts. Preserve the headline figure from the draft.
+Return exactly one JSON object with this shape: {\"answer\": \"concise answer\"}.
 """
 
 
 def build_summary_prompt(question: str, facts: Dict[str, Any], draft: str) -> str:
+    """Build a bounded, explicit prompt for fact-checked answer polishing."""
     import json
+
     return (
-        f"QUESTION:\n{question}\n\n"
-        f"FACTS:\n{json.dumps(facts, ensure_ascii=False, indent=2, default=str)}\n\n"
-        f"DRAFT:\n{draft}\n\n"
-        "Rewrite the DRAFT as the final answer following the rules. If the DRAFT is already clear, return it unchanged."
+        "USER QUESTION:\n" + str(question) +
+        "\n\nVERIFIED FACTS (JSON):\n" + json.dumps(facts, ensure_ascii=False, default=str) +
+        "\n\nDETERMINISTIC DRAFT:\n" + str(draft) +
+        "\n\nRewrite the draft concisely. Output JSON only."
     )
 
 
@@ -195,19 +171,6 @@ def build_dataset_context(
                 unique_cnt = profile["columns"][c_name].get("unique_count", "unknown")
             lines.append(f"- {c_name}: semantic_type={sem}, data_type={dtype_str}, nullable={nullable}, unique_count={unique_cnt}")
 
-    if df is not None:
-        from analyst.semantics import describe_metric_availability, temporal_columns
-        availability = describe_metric_availability(df)
-        if availability:
-            lines.append("")
-            lines.append("### METRIC AVAILABILITY (computed from the schema)")
-            lines.extend(availability)
-        year_cols, date_cols = temporal_columns(df)
-        lines.append("")
-        lines.append("### TEMPORAL FIELDS")
-        lines.append(f"year columns: {', '.join(year_cols) or 'none'}")
-        lines.append(f"date columns: {', '.join(date_cols) or 'none'}")
-
     lines.append("")
     lines.append("### SAMPLE VALUES")
     if df is not None:
@@ -230,23 +193,12 @@ def build_dataset_context(
     return "\n".join(lines)
 
 
-def build_user_prompt(
-    question: str,
-    dataset_context: str,
-    previous_query: Optional[Dict[str, Any]] = None
-) -> str:
-    """Combines user question, dataset context, and optional previous query context for the LLM."""
-    parts = [dataset_context]
-    if previous_query:
-        import json
-        prev_str = json.dumps(previous_query, indent=2)
-        parts.append(
-            f"\n### ACTIVE ANALYTICAL CONTEXT (PREVIOUS QUERY PLAN):\n"
-            f"{prev_str}\n\n"
-            f"FOLLOW-UP INSTRUCTION:\n"
-            f"If the user's question is a follow-up or refinement (e.g. 'break this down by...', 'what about Germany?', 'average instead?', 'only First Class'), "
-            f"PRESERVE the active metric, aggregation, and filters from the previous query plan, and modify only the requested dimensions/filters/aggregation."
-        )
+def build_user_prompt(question: str, dataset_context: str, conversation_context: Optional[Dict[str, Any]] = None) -> str:
+    """Combines user question and dataset context for the LLM."""
+    prior = f"\n### PRIOR CONVERSATION ANALYSIS (use for follow-ups; preserve metric/geography unless user changes them):\n{conversation_context}\n" if conversation_context else ""
+    return f"""{dataset_context}
+{prior}
 
-    parts.append(f"\n### USER QUESTION:\n\"{question}\"\n")
-    return "\n".join(parts)
+### USER QUESTION:
+"{question}"
+"""
