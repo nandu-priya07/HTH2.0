@@ -91,8 +91,15 @@ def process_query_with_llm(
     cand_ms = round((time.perf_counter() - t1) * 1000, 2)
 
     # 4. Build Dataset Context & Prompt Enriched with Candidate Matches
+    t_prompt0 = time.perf_counter()
     dataset_context = build_dataset_context(schema, profile, df, dataset_id)
     user_prompt = build_user_prompt(prep_q.original_query, dataset_context, conversation_context, candidates=cand_dict if cand_dict else None)
+    prompt_ms = round((time.perf_counter() - t_prompt0) * 1000, 2)
+    prompt_chars = len(user_prompt)
+    estimated_tokens = prompt_chars // 4
+    num_rows = len(df) if df is not None else 0
+    num_cols = len(df.columns) if df is not None else 0
+    num_cands = (len(cand_dict.get("columns", [])) + len(cand_dict.get("values", [])) + len(cand_dict.get("metrics", []))) if cand_dict else 0
 
     # 5. Call Ollama Qwen3 (Primary Semantic Query Interpreter)
     t2 = time.perf_counter()
@@ -110,10 +117,22 @@ def process_query_with_llm(
             raw_data = None
     llm_ms = round((time.perf_counter() - t2) * 1000, 2)
 
-    if not raw_data or (isinstance(raw_data, dict) and raw_data.get("type") == "clarification" and "couldn't find a matching column" in str(raw_data.get("answer", "")).lower()):
-        fb_data = _fallback_router(clean_q, df, schema, conversation_context=conversation_context)
-        if not raw_data or fb_data.get("type") == "data_query":
-            raw_data = fb_data
+    logger.info(
+        f"[QUERY_PIPELINE] PREPROCESS={pre_ms}ms | VALUE_RESOLUTION={cand_ms}ms | "
+        f"PROMPT_BUILD={prompt_ms}ms ({prompt_chars} chars, ~{estimated_tokens} tokens) | "
+        f"LLM={llm_ms}ms (calls={1 if client.is_available() else 0}) | ROWS={num_rows} | COLS={num_cols}"
+    )
+
+    fb_data = _fallback_router(clean_q, df, schema, conversation_context=conversation_context)
+    if not raw_data:
+        raw_data = fb_data
+    elif isinstance(raw_data, dict) and raw_data.get("type") in ("direct_answer", "clarification"):
+        if fb_data and fb_data.get("type") == "data_query":
+            q_clean_alpha = re.sub(r"[^\w\s]", "", clean_q.lower()).strip()
+            is_pure_convo = q_clean_alpha in ("hello", "hi", "hey", "who are you", "what can you do", "help")
+            is_conceptual_def = bool(re.search(r"^what is (?:a |an )?(database|sql|profit|sales|revenue|data analysis)\??$", clean_q.lower()))
+            if not is_pure_convo and not is_conceptual_def:
+                raw_data = fb_data
 
     # 6. Parse LLM JSON into LLMResponse
     resp = _parse_llm_json(raw_data, clean_q)
@@ -132,8 +151,15 @@ def process_query_with_llm(
 
     resp.timing = {
         "preprocess_ms": pre_ms,
-        "candidate_ms": cand_ms,
-        "llm_inference_ms": llm_ms
+        "candidate_resolution_ms": cand_ms,
+        "prompt_build_ms": prompt_ms,
+        "llm_inference_ms": llm_ms,
+        "prompt_chars": prompt_chars,
+        "estimated_tokens": estimated_tokens,
+        "row_count": num_rows,
+        "col_count": num_cols,
+        "candidate_matches": num_cands,
+        "llm_calls": 1 if client.is_available() else 0
     }
 
     if resp.geo_query:

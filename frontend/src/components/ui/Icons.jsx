@@ -293,3 +293,5 @@ export function AlertTriangleIcon(props) { return <IconBase {...props}><><path d
 export function CornerDownRightIcon(props) { return <IconBase {...props}><><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></></IconBase> }
 export function FileSpreadsheetIcon(props) { return <IconBase {...props}><><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></></IconBase> }
 export function GitBranchIcon(props) { return <IconBase {...props}><><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></></IconBase> }
+export function ZapIcon(props) { return <IconBase {...props}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></IconBase> }
+

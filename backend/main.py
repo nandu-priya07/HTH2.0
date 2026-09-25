@@ -14,7 +14,13 @@ from auth import AuthContextMiddleware, router as auth_router
 async def lifespan(app: FastAPI):
     # Initialize Supabase PostgreSQL database schema on startup
     initialize_supabase_database()
+
+    # Pre-load and warm-up LLM model into GPU VRAM once on application startup
+    from llm import get_llm_model_manager
+    manager = get_llm_model_manager()
+    manager.initialize()
     yield
+
 
 
 app = FastAPI(

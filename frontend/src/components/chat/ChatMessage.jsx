@@ -20,6 +20,8 @@ import EvidencePanel from '../analytics/EvidencePanel'
 import { buildExplanation } from '../../lib/explain'
 import { formatBytes } from '../../lib/dataset'
 import GeoDecisionExplorer from '../analytics/GeoDecisionExplorer'
+import ResponseTiming from '../analytics/ResponseTiming'
+
 
 /* Renders plain text with **bold** spans and paragraph breaks. */
 function RichText({ text }) {
@@ -336,7 +338,8 @@ export default function ChatMessage({
     geo,
     geo_result,
     geo_evidence,
-    kind
+    kind,
+    timing
   } = message
 
   if (sender === 'user') {
@@ -429,7 +432,10 @@ export default function ChatMessage({
               </>
             )}
 
+            {timing && <ResponseTiming timing={timing} />}
+
             {error && <div className="answer-warning" role="alert"><AlertCircleIcon size={14} /> {error}</div>}
+
 
             {followUps.length > 0 && onSelectOption && (
               <div className="followups">

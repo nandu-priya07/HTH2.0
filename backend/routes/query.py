@@ -51,23 +51,48 @@ def _build_timing(
     t_llm_ms: float = 0.0,
     t_exec_ms: float = 0.0,
     t_format_ms: float = 0.0,
-    llm_timing: Optional[Dict[str, Any]] = None
+    llm_timing: Optional[Dict[str, Any]] = None,
+    cache_hit: bool = True
 ) -> Dict[str, Any]:
     t_total_ms = (time.perf_counter() - t_req_start) * 1000
+    pre_ms = (llm_timing or {}).get("preprocess_ms", 0.0)
+    cand_ms = (llm_timing or {}).get("candidate_resolution_ms", 0.0)
+    prompt_ms = (llm_timing or {}).get("prompt_build_ms", 0.0)
+    prompt_chars = (llm_timing or {}).get("prompt_chars", 0)
+    est_tokens = (llm_timing or {}).get("estimated_tokens", 0)
+    rows = (llm_timing or {}).get("row_count", 0)
+    cols = (llm_timing or {}).get("col_count", 0)
+    llm_calls = (llm_timing or {}).get("llm_calls", 1 if t_llm_ms > 0 else 0)
+
     timing_dict = {
         "total_ms": round(t_total_ms, 2),
         "chat_ms": round(t_chat_ms, 2),
         "context_ms": round(t_context_ms, 2),
         "runtime_ms": round(t_runtime_ms, 2),
+        "preprocess_ms": round(pre_ms, 2),
+        "candidate_resolution_ms": round(cand_ms, 2),
+        "prompt_build_ms": round(prompt_ms, 2),
         "llm_ms": round(t_llm_ms, 2),
+        "duckdb_ms": round(t_exec_ms, 2),
         "exec_ms": round(t_exec_ms, 2),
         "format_ms": round(t_format_ms, 2),
+        "cache_status": "HIT" if cache_hit else "MISS",
+        "prompt_metrics": {
+            "char_count": prompt_chars,
+            "estimated_token_count": est_tokens,
+            "dataset_rows": rows,
+            "dataset_columns": cols,
+            "llm_calls": llm_calls
+        },
         "steps": {
             "request_received": "0.00ms",
             "chat_context": f"{t_chat_ms:.2f}ms",
             "context_resolution": f"{t_context_ms:.2f}ms",
-            "runtime_cache_lookup": f"{t_runtime_ms:.2f}ms",
-            "llm_query_understanding": f"{t_llm_ms:.2f}ms",
+            "runtime_cache_lookup": f"{t_runtime_ms:.2f}ms ({'HIT' if cache_hit else 'MISS'})",
+            "preprocess": f"{pre_ms:.2f}ms",
+            "value_resolution": f"{cand_ms:.2f}ms",
+            "prompt_build": f"{prompt_ms:.2f}ms ({prompt_chars} chars, ~{est_tokens} tokens)",
+            "llm_query_understanding": f"{t_llm_ms:.2f}ms ({llm_calls} call)",
             "analytical_execution": f"{t_exec_ms:.2f}ms",
             "response_formatting": f"{t_format_ms:.2f}ms",
             "total_request_time": f"{t_total_ms:.2f}ms"

@@ -1,13 +1,11 @@
 """
 Local Ollama LLM Client.
-Communicates with locally running Ollama service for Qwen3:8b model inference.
+Delegates to LLMModelManager singleton for permanent VRAM model reuse and fast inference.
 """
 
-import os
-import json
 import logging
 from typing import Any, Dict, Optional
-import httpx
+from .manager import get_llm_model_manager
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +14,7 @@ DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
 class OllamaClient:
-    """Client for communicating with local Ollama instance."""
+    """Client wrapper for communicating with Ollama via LLMModelManager singleton."""
 
     def __init__(
         self,
@@ -24,29 +22,15 @@ class OllamaClient:
         model: Optional[str] = None,
         timeout: float = 60.0
     ):
-        self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
-        self.model = model or os.environ.get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
-        self.timeout = timeout
-
-    _cached_available = None
-    _last_check_time = 0.0
+        self.manager = get_llm_model_manager()
+        if base_url and base_url.rstrip("/") != self.manager.base_url:
+            self.manager.base_url = base_url.rstrip("/")
+        if model and model != self.manager.model_name:
+            self.manager.model_name = model
 
     def is_available(self) -> bool:
-        """Checks if the Ollama service is reachable with caching."""
-        import time
-        now = time.time()
-        if OllamaClient._cached_available is not None:
-            cache_duration = 30.0 if OllamaClient._cached_available else 10.0
-            if now - OllamaClient._last_check_time < cache_duration:
-                return OllamaClient._cached_available
-        try:
-            with httpx.Client(timeout=2.0) as client:
-                resp = client.get(f"{self.base_url}/api/tags")
-                OllamaClient._cached_available = (resp.status_code == 200)
-        except Exception:
-            OllamaClient._cached_available = False
-        OllamaClient._last_check_time = now
-        return OllamaClient._cached_available
+        """Checks if the local LLM service is available."""
+        return self.manager.is_available()
 
     def generate_json(
         self,
@@ -56,68 +40,11 @@ class OllamaClient:
         think: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
-        Sends system and user prompt to Ollama and expects a structured JSON object response.
-        think=False disables Qwen3's reasoning trace for short, latency-sensitive calls.
+        Sends system and user prompt to LLMModelManager for fast JSON inference.
         """
-        url = f"{self.base_url}/api/generate"
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "prompt": user_prompt,
-            "format": "json",
-            "stream": False,
-            "keep_alive": "24h",
-            "options": {
-                "temperature": temperature
-            }
-        }
-        if think is not None:
-            payload["think"] = think
-
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(url, json=payload)
-                if response.status_code != 200:
-                    raise RuntimeError(f"Ollama API returned HTTP {response.status_code}: {response.text}")
-
-                data = response.json()
-                raw_response = data.get("response", "{}")
-                return self._parse_json_response(raw_response)
-        except httpx.ConnectError as e:
-            logger.error(f"Cannot connect to Ollama at {self.base_url}: {e}")
-            raise ConnectionError(
-                "The local query model is currently unavailable. Please make sure Ollama is running."
-            ) from e
-        except httpx.TimeoutException as e:
-            logger.error(f"Ollama inference timed out after {self.timeout}s: {e}")
-            raise TimeoutError(
-                "Local model inference timed out. Please check system resources."
-            ) from e
-        except Exception as e:
-            logger.error(f"Ollama request error: {e}")
-            raise
-
-    def _parse_json_response(self, text: str) -> Dict[str, Any]:
-        """Strips markdown and parses JSON safely."""
-        clean = text.strip()
-        if clean.startswith("```json"):
-            clean = clean[7:]
-        elif clean.startswith("```"):
-            clean = clean[3:]
-        if clean.endswith("```"):
-            clean = clean[:-3]
-        clean = clean.strip()
-
-        try:
-            return json.loads(clean)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse Ollama output as JSON: '{text}'. Error: {e}")
-            # Try regex finding json block
-            import re
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m:
-                try:
-                    return json.loads(m.group(0))
-                except Exception:
-                    pass
-            raise ValueError(f"Model returned invalid JSON: {text}") from e
+        return self.manager.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            think=think
+        )

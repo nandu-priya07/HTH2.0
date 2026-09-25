@@ -28,7 +28,9 @@ NUMERIC_OPERATIONS = {
 }
 
 VALID_CONDITION_OPERATORS = {
-    "equals", "=", "==", "!=", "<>", ">", ">=", "<", "<=", "contains", "in"
+    "eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in", "contains",
+    "starts_with", "ends_with", "between", "equals", "=", "==", "!=",
+    "<>", ">", ">=", "<", "<="
 }
 
 

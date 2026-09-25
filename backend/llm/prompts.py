@@ -16,8 +16,8 @@ You receive:
 5. Representative sample values and top records
 
 Your job is to determine whether the user requires:
-- a dataset query ("data_query"): when the user asks for calculation, aggregation, conditional counting, filtering, grouping, sorting, or multi-query metrics from the dataset.
-- a direct answer ("direct_answer"): for general conversational questions (e.g. "Hello", "What can you do?", "What is a database?") or conceptual explanations (e.g. "What is profit?").
+- a dataset query ("data_query"): when the user asks for calculation, aggregation (sum, average, count, min, max, total), conditional counting, filtering, grouping, sorting, or multi-query metrics from the dataset (e.g., "What is the total profit?", "What is total sales?", "What is the average discount?").
+- a direct answer ("direct_answer"): ONLY for general conversational questions (e.g. "Hello", "What can you do?", "What is a database?") or conceptual explanations (e.g. "What is profit?").
 - a clarification ("clarification"): when the query is ambiguous, missing an operation (e.g. "sales?"), or refers to non-existent columns.
 
 Output Requirements:
@@ -125,11 +125,8 @@ def build_dataset_context(
     dataset_id: Optional[str] = None
 ) -> str:
     """
-    Constructs compact, informative dataset context for Qwen3:8b:
-    - Dataset info (dataset_id, row_count, column_count)
-    - Column info (name, semantic_type, data_type, nullable, unique_count)
-    - Sample values for columns
-    - Representative sample rows (top 3 rows)
+    Constructs compact, informative dataset context for Qwen3:8b.
+    NO full dataset rows, CSV dumps, or dataframe .to_string() representations are sent to the LLM.
     """
     lines = []
     lines.append("### DATASET INFORMATION")
@@ -172,23 +169,18 @@ def build_dataset_context(
             lines.append(f"- {c_name}: semantic_type={sem}, data_type={dtype_str}, nullable={nullable}, unique_count={unique_cnt}")
 
     lines.append("")
-    lines.append("### SAMPLE VALUES")
+    lines.append("### SAMPLE CATEGORICAL VALUES")
     if df is not None:
         for col in df.columns:
-            unique_samples = [str(v) for v in df[col].dropna().unique()[:6] if str(v).strip()]
-            if unique_samples:
-                lines.append(f"{col}: {', '.join(unique_samples)}")
+            if not pd.api.types.is_numeric_dtype(df[col]) and not pd.api.types.is_datetime64_any_dtype(df[col]):
+                unique_samples = [str(v) for v in df[col].dropna().unique()[:4] if str(v).strip()]
+                if unique_samples:
+                    lines.append(f"{col}: {', '.join(unique_samples)}")
     elif profile and "columns" in profile:
         for c_name, c_info in profile["columns"].items():
             samples = c_info.get("sample_values") or c_info.get("top_values") or []
             if samples:
-                lines.append(f"{c_name}: {', '.join(str(s) for s in samples[:6])}")
-
-    lines.append("")
-    lines.append("### SAMPLE ROWS (Top 3)")
-    if df is not None and len(df) > 0:
-        sample_df = df.head(3)
-        lines.append(sample_df.to_string(index=False, max_cols=14))
+                lines.append(f"{c_name}: {', '.join(str(s) for s in samples[:4])}")
 
     return "\n".join(lines)
 
