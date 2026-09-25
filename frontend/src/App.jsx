@@ -11,6 +11,8 @@ import ScenariosPage from './pages/ScenariosPage'
 import DecisionsPage from './pages/DecisionsPage'
 import HistoryPage from './pages/HistoryPage'
 import NotFoundPage from './pages/NotFoundPage'
+import AuthPage from './pages/AuthPage'
+import { useAuth } from './state/authContext'
 
 const ROUTES = {
   '/': { page: HomePage, title: 'Home' },
@@ -21,11 +23,14 @@ const ROUTES = {
   '/explorer': { page: ExplorerPage, title: 'Explorer' },
   '/scenarios': { page: ScenariosPage, title: 'Scenarios' },
   '/decisions': { page: DecisionsPage, title: 'Decisions' },
-  '/history': { page: HistoryPage, title: 'History' }
+  '/history': { page: HistoryPage, title: 'History' },
+  '/signin': { page: () => <AuthPage mode="signin" />, title: 'Sign in' },
+  '/signup': { page: () => <AuthPage mode="signup" />, title: 'Create account' }
 }
 
 function App() {
   const path = usePath()
+  const { user } = useAuth()
   const route = ROUTES[path] || { page: NotFoundPage, title: 'Not found' }
   const Page = route.page
 
@@ -34,7 +39,7 @@ function App() {
   }, [route.title])
 
   return (
-    <AnalystProvider>
+    <AnalystProvider key={user?.id || 'guest-session'}>
       <AppShell fullBleed={route.fullBleed}>
         <Page key={path} />
       </AppShell>

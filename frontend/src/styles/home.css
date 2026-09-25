@@ -51,7 +51,7 @@
    The image dominates; the gradients are subtle atmospheric reinforcements. */
 .hero {
   position: relative;
-  padding: var(--space-16) 0 var(--space-12);
+  padding: clamp(40px, 5vw, 64px) 0 clamp(32px, 4vw, 48px);
   background:
     radial-gradient(840px 540px at 80% 40%, rgba(56, 189, 248, 0.07) 0%, transparent 70%),
     radial-gradient(480px 360px at 86% 46%, rgba(160, 82, 229, 0.04) 0%, transparent 65%),
@@ -62,19 +62,20 @@
 .hero-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
-  gap: var(--space-10);
+  gap: clamp(28px, 4vw, 56px);
   align-items: center;
 }
 
 .hero-copy {
   position: relative;
   z-index: 2;
+  min-width: 0;
 }
 
 /* ── Coordinate ruler (analytical micro-detail: lat/long of active globe marker) ── */
 .hero-ruler {
   position: absolute;
-  left: -50px;
+  left: clamp(-42px, -3.5vw, -24px);
   top: 58px;
   bottom: 34%;
   display: flex;
@@ -164,11 +165,13 @@
 .hero-title {
   margin-top: var(--space-6);
   font-family: var(--font-display);
-  font-size: clamp(42px, 5.2vw, 68px);
+  font-size: clamp(38px, 5.2vw, 68px);
   font-weight: 800;
   line-height: 1.04;
   letter-spacing: -0.042em;
   color: var(--video-text);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .hero-title-line-1 {
@@ -228,7 +231,7 @@
 
 .hero-lead {
   margin-top: var(--space-6);
-  font-size: 17.5px;
+  font-size: clamp(15px, 1.35vw, 17.5px);
   color: var(--video-muted);
   max-width: 460px;
   line-height: 1.6;
@@ -238,7 +241,7 @@
 
 .hero-ctas {
   display: flex;
-  gap: var(--space-4);
+  gap: clamp(10px, 1.4vw, 16px);
   margin-top: var(--space-8);
   flex-wrap: wrap;
   align-items: center;
@@ -521,7 +524,7 @@
 .hero-visual {
   position: relative;
   aspect-ratio: 1.25 / 1;
-  min-height: 380px;
+  min-height: clamp(280px, 31vw, 380px);
 }
 .hero-visual-stage {
   position: absolute;
@@ -679,7 +682,7 @@
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--video-border);
   border-radius: var(--radius-lg);
-  padding: 13px 15px;
+  padding: clamp(11px, 1.1vw, 13px) clamp(12px, 1.25vw, 15px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 1),
     0 2px 6px rgba(15, 23, 42, 0.04),
@@ -1401,7 +1404,7 @@
 }
 
 /* ── Responsive Behavior ── */
-@media (max-width: 1100px) {
+@media (max-width: 960px) {
   .hero-grid {
     grid-template-columns: 1fr;
   }
@@ -1492,11 +1495,13 @@
 .querylens-hero-visual {
   position: relative;
   width: 100%;
+  min-width: 0;
   max-width: 640px;
   aspect-ratio: 1.25 / 1;
-  min-height: 420px;
+  min-height: clamp(300px, 31vw, 420px);
   margin: 0 auto;
   perspective: 1000px;
+  overflow: clip;
 }
 
 /* ── Depth Layers ── */
@@ -1526,10 +1531,11 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 520px;
-  height: 520px;
-  margin-left: -260px;
-  margin-top: -260px;
+  width: min(520px, 120%);
+  aspect-ratio: 1;
+  height: auto;
+  margin: 0;
+  transform: translate(-50%, -50%);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -1775,25 +1781,25 @@
    Each card owns its video-derived accent (--fc-accent). */
 .fc-revenue-pulse {
   --fc-accent: var(--video-cool);
-  top: 0;
-  left: -2%;
-  width: 205px;
+  top: 1%;
+  left: 1%;
+  width: clamp(170px, 14.3vw, 205px);
   animation: floatCardRev 6s ease-in-out infinite;
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
 .fc-region-insight {
   --fc-accent: var(--video-warm);
   bottom: 1%;
-  left: 4%;
-  width: 215px;
+  left: 2%;
+  width: clamp(178px, 15vw, 215px);
   animation: floatCardReg 7.2s ease-in-out infinite -2.5s;
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
 .fc-quality-pulse {
   --fc-accent: var(--video-accent);
   top: 6%;
-  right: -2%;
-  width: 210px;
+  right: 1%;
+  width: clamp(172px, 14.6vw, 210px);
   animation: floatCardQual 5.8s ease-in-out infinite -1.2s;
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
   cursor: pointer;
@@ -1801,8 +1807,8 @@
 .fc-live-query {
   --fc-accent: var(--video-cyan-bright);
   bottom: 3%;
-  right: -2%;
-  width: 235px;
+  right: 1%;
+  width: clamp(188px, 16.3vw, 235px);
   border-left: 3px solid var(--video-cool);
   animation: floatCardQuery 6.6s ease-in-out infinite -3.6s;
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
@@ -2090,26 +2096,26 @@
 /* ── Responsive Adaptations for Hero Visual ── */
 @media (max-width: 1080px) {
   .querylens-hero-visual {
-    max-width: 540px;
-    min-height: 380px;
+    max-width: 600px;
+    min-height: clamp(300px, 36vw, 380px);
   }
-  .fc-revenue-pulse { left: 0; width: 185px; }
-  .fc-region-insight { left: 2%; width: 195px; }
-  .fc-quality-pulse { right: 0; width: 190px; }
-  .fc-live-query { right: 0; width: 215px; }
+  .fc-revenue-pulse { left: 1%; width: clamp(165px, 19vw, 185px); }
+  .fc-region-insight { left: 2%; width: clamp(172px, 20vw, 195px); }
+  .fc-quality-pulse { right: 1%; width: clamp(165px, 19vw, 190px); }
+  .fc-live-query { right: 1%; width: clamp(180px, 22vw, 215px); }
 }
 
 @media (max-width: 768px) {
   .querylens-hero-visual {
-    max-width: 480px;
+    max-width: 520px;
     aspect-ratio: 1.15 / 1;
-    min-height: 340px;
+    min-height: clamp(280px, 40vw, 340px);
   }
   /* On mobile/smaller screens, position cards safely without overlap blowout */
   .fc-revenue-pulse {
     top: -10px;
     left: 2%;
-    width: 175px;
+    width: clamp(148px, 23vw, 175px);
   }
   .fc-region-insight {
     display: none; /* keep clean space on mobile */
@@ -2117,7 +2123,7 @@
   .fc-quality-pulse {
     top: -10px;
     right: 2%;
-    width: 175px;
+    width: clamp(148px, 23vw, 175px);
   }
   .fc-live-query {
     bottom: -10px;
@@ -2191,7 +2197,7 @@
 @media (max-width: 1320px) {
   .hero-ruler { display: none; }
 }
-@media (max-width: 1100px) {
+@media (max-width: 960px) {
   .hero-signal:first-child { padding-left: 14px; }
 }
 @media (max-width: 560px) {
@@ -2203,10 +2209,10 @@
 /* ── Tablet / mobile hero composition ──
    Grid columns must be allowed to shrink below the visual's aspect-ratio minimum,
    otherwise the whole page overflows horizontally on phones. */
-@media (max-width: 1100px) {
+@media (max-width: 960px) {
   .hero-grid { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .querylens-hero-visual {
     max-width: 100%;
     min-height: 0;
@@ -2225,7 +2231,7 @@
   .querylens-hero-visual .fc-revenue-pulse {
     top: 0;
     left: 0;
-    width: 172px !important;
+    width: clamp(145px, 42vw, 172px) !important;
     padding: 11px 13px;
   }
   .querylens-hero-visual .fc-revenue-pulse .fc-value { font-size: 20px; }

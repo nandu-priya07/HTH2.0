@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { EmptyState, Link } from '../components/ui/primitives'
 import { useAnalyst } from '../state/analystContext'
+import { useAuth } from '../state/authContext'
 import { navigate } from '../lib/router'
 import { formatCount } from '../lib/dataset'
 import { ClockIcon, DatabaseIcon, MessageSquareIcon, ArrowRightIcon, UploadIcon, PaperclipIcon } from '../components/ui/Icons'
@@ -61,6 +62,7 @@ function useRecentQuestions(enabled, conversations) {
 }
 
 export default function HistoryPage() {
+  const { user } = useAuth()
   const { conversations, isLoadingConversations, conversationsError, fetchConversations, selectConversation } = useAnalyst()
   const [tab, setTab] = useState('analyses')
   const datasets = useDatasets(tab === 'datasets')
@@ -79,6 +81,8 @@ export default function HistoryPage() {
           </div>
         </header>
 
+        {!user && <div className="auth-history-note">You’re using a guest session. Chats and uploads are temporary and won’t appear in saved history. <Link to="/signup">Create an account</Link></div>}
+
         <div className="segmented history-tabs" role="tablist" aria-label="History sections">
           {TABS.map((t) => (
             <button key={t.id} role="tab" type="button" aria-selected={tab === t.id} aria-pressed={tab === t.id} onClick={() => setTab(t.id)}>{t.label}</button>
@@ -94,7 +98,7 @@ export default function HistoryPage() {
                 </EmptyState>
               ) : !conversations.length ? (
                 <EmptyState icon={<MessageSquareIcon size={22} />} title="No analyses yet" actions={<Link to="/upload" className="btn btn-primary btn-sm"><UploadIcon size={14} /> Upload a dataset</Link>}>
-                  Upload a dataset and ask a question — the conversation will be saved here.
+                  {user ? 'Upload a dataset and ask a question — the conversation will be saved here.' : 'Sign in or create an account to save conversations and datasets here.'}
                 </EmptyState>
               ) : (
                 <ul className="history-rows">

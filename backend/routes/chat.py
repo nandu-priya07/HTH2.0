@@ -14,6 +14,7 @@ from chat.models import (
     MessageResponse
 )
 from chat import get_chat_service
+from auth import current_user
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ async def list_all_conversations(
     try:
         service = get_chat_service()
         conversations = service.list_conversations(limit=limit, offset=offset)
+        if not current_user():
+            conversations = []
         res_list = []
         for c in conversations:
             files = service.get_files(c.id)

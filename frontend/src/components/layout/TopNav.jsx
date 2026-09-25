@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from '../ui/primitives'
 import { usePath } from '../../lib/router'
 import { useAnalyst } from '../../state/analystContext'
+import { useAuth } from '../../state/authContext'
 import { getDatasetStats, formatCount } from '../../lib/dataset'
 import { BellIcon, HelpCircleIcon, DatabaseIcon, MenuIcon, CloseIcon, UploadIcon } from '../ui/Icons'
 
@@ -80,6 +81,7 @@ function DatasetStatus() {
 
 export default function TopNav() {
   const path = usePath()
+  const { user, signOut } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const closeMenu = () => setMenuOpen(false)
 
@@ -129,11 +131,14 @@ export default function TopNav() {
               <li>Get an <strong>answer, a chart and the calculation</strong>.</li>
             </ol>
           </Popover>
-          <button type="button" className="avatar" aria-label="Profile" title="Profile">U</button>
+          {user ? <button type="button" className="avatar" aria-label="Sign out" title={`Sign out ${user.display_name}`} onClick={signOut}>{user.display_name?.slice(0, 1)?.toUpperCase() || 'U'}</button> : <>
+            <Link to="/signin" className="topnav-auth-link">Sign in</Link>
+            <Link to="/signup" className="topnav-auth-link topnav-auth-signup">Sign up</Link>
+          </>}
           <button
             type="button"
             className="icon-btn topnav-menu-btn"
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}
             aria-expanded={menuOpen}
             aria-controls="mobile-nav"
             onClick={() => setMenuOpen((o) => !o)}
@@ -159,6 +164,7 @@ export default function TopNav() {
           <Link to="/upload" className="btn btn-primary" style={{ marginTop: 8 }} onClick={closeMenu}>
             <UploadIcon size={16} /> Upload dataset
           </Link>
+          {user ? <button type="button" className="mobile-nav-link" onClick={() => { closeMenu(); signOut() }}>Sign out · {user.display_name}</button> : <div className="mobile-nav-auth"><Link to="/signin" className="mobile-nav-link" onClick={closeMenu}>Sign in</Link><Link to="/signup" className="mobile-nav-link" onClick={closeMenu}>Create account</Link></div>}
         </nav>
       )}
     </header>

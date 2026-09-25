@@ -2,6 +2,7 @@ import os
 import uuid
 import shutil
 import logging
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, File, Form, UploadFile, status, HTTPException
@@ -21,6 +22,7 @@ from storage.dataset_manager import (
 )
 from chat import get_chat_service
 from chat.models import utc_now_iso
+from auth import is_persistent_session
 from file_processing.insights_generator import generate_dataset_insights
 from file_processing.decision_generator import generate_dataset_decisions
 
@@ -33,6 +35,15 @@ STORAGE_CHATS_DIR = BASE_DIR / "storage" / "chats"
 UPLOAD_DIR = RAW_DIR
 
 
+def _get_session_dataset(dataset_id: str):
+    service = get_chat_service()
+    for conversation in service.list_conversations(limit=500):
+        attached = {item.get("file_id") for item in service.get_files(conversation.id)}
+        if conversation.dataset_id == dataset_id or dataset_id in attached:
+            return get_or_load_dataset(dataset_id, chat_id=conversation.id)
+    return None
+
+
 def process_and_store_chat_file(
     content: bytes,
     filename: str,
@@ -42,35 +53,45 @@ def process_and_store_chat_file(
     Saves raw and cleaned dataset files inside storage/chats/{chat_id}/files/,
     indexes schema, and registers file metadata in conversation.json.
     """
-    chat_dir = STORAGE_CHATS_DIR / chat_id / "files"
-    chat_dir.mkdir(parents=True, exist_ok=True)
+    persistent = is_persistent_session()
 
     ext = os.path.splitext(filename)[1].lower()
     clean_ext = ext.lstrip(".")
     file_id = f"file_{uuid.uuid4().hex[:8]}"
 
-    raw_path = chat_dir / f"{file_id}.raw.{clean_ext}"
-    with open(raw_path, "wb") as f:
-        f.write(content)
+    temporary = None
+    if persistent:
+        chat_dir = STORAGE_CHATS_DIR / chat_id / "files"
+        chat_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        temporary = tempfile.TemporaryDirectory(prefix="querylens-guest-upload-")
+        chat_dir = Path(temporary.name)
+    try:
+        raw_path = chat_dir / f"{file_id}.raw.{clean_ext}"
+        with open(raw_path, "wb") as f:
+            f.write(content)
+        process_result = process_file(file_path=raw_path, dataset_id=file_id,
+            original_filename=filename, processed_dir=chat_dir)
+        processed_path = chat_dir / process_result["processed_filename"]
+        if not persistent:
+            process_result["data"] = process_result["data"].copy()
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
 
-    process_result = process_file(
-        file_path=raw_path,
-        dataset_id=file_id,
-        original_filename=filename,
-        processed_dir=chat_dir
-    )
-
-    processed_path = chat_dir / process_result["processed_filename"]
+    raw_path_value = str(raw_path) if persistent else None
+    processed_path_value = str(processed_path) if persistent else None
+    file_path_value = str(processed_path) if persistent else None
 
     # Also mirror raw and processed file into RAW_DIR and PROCESSED_DIR for legacy dataset compatibility
     try:
-        if RAW_DIR.exists():
+        if persistent and RAW_DIR.exists():
             with open(RAW_DIR / f"{file_id}.csv", "wb") as f:
                 f.write(content)
             if clean_ext != "csv":
                 with open(RAW_DIR / f"{file_id}.{clean_ext}", "wb") as f:
                     f.write(content)
-        if PROCESSED_DIR.exists():
+        if persistent and PROCESSED_DIR.exists():
             shutil.copy2(processed_path, PROCESSED_DIR / f"{file_id}.csv")
     except Exception as e:
         logger.warning(f"Failed to mirror files to uploads/: {e}")
@@ -80,8 +101,8 @@ def process_and_store_chat_file(
         "filename": filename,
         "stored_filename": f"{file_id}.{clean_ext}",
         "processed_filename": process_result["processed_filename"],
-        "storage_path": str(raw_path),
-        "processed_path": str(processed_path),
+        "storage_path": raw_path_value,
+        "processed_path": processed_path_value,
         "file_type": clean_ext,
         "file_size": len(content),
         "schema": process_result["schema"],
@@ -101,7 +122,7 @@ def process_and_store_chat_file(
         "filename": filename,
         "stored_filename": f"{file_id}.{clean_ext}",
         "processed_filename": process_result["processed_filename"],
-        "file_path": str(processed_path),
+        "file_path": file_path_value,
         "file_type": clean_ext,
         "file_size": len(content),
         "status": "processed",
@@ -113,12 +134,13 @@ def process_and_store_chat_file(
         "cleaning_report": process_result["cleaning_report"]
     }
     register_dataset(file_id, dataset_entry)
-    save_dataset_meta(file_id, {
-        "dataset_id": file_id,
-        "filename": filename,
-        "file_type": clean_ext,
-        "file_size": len(content)
-    })
+    if persistent:
+        save_dataset_meta(file_id, {
+            "dataset_id": file_id,
+            "filename": filename,
+            "file_type": clean_ext,
+            "file_size": len(content)
+        })
 
     return file_meta, process_result
 
@@ -131,6 +153,11 @@ async def get_datasets_list():
     """
     try:
         datasets = list_all_datasets()
+        service = get_chat_service()
+        conversations = service.list_conversations()
+        allowed = {file.get("file_id") for conv in conversations for file in service.get_files(conv.id)}
+        allowed.update(conv.dataset_id for conv in conversations if conv.dataset_id)
+        datasets = [item for item in datasets if item.get("dataset_id") in allowed] if is_persistent_session() else []
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
@@ -339,7 +366,7 @@ async def get_dataset_info(dataset_id: str):
     """
     Returns full metadata, schema, and profile for a specific dataset.
     """
-    ds_info = get_or_load_dataset(dataset_id)
+    ds_info = _get_session_dataset(dataset_id)
     if not ds_info:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -372,7 +399,7 @@ async def get_dataset_suggestions_endpoint(dataset_id: str):
     """
     Generates dynamic analytical question suggestions based on the dataset's schema and column types.
     """
-    ds_info = get_or_load_dataset(dataset_id)
+    ds_info = _get_session_dataset(dataset_id)
     if not ds_info:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -400,7 +427,7 @@ async def get_dataset_insights_endpoint(dataset_id: str):
     Returns dynamically computed analytical insights, comparisons, time-series trends,
     and outlier anomalies for the requested dataset.
     """
-    ds_info = get_or_load_dataset(dataset_id)
+    ds_info = _get_session_dataset(dataset_id)
     if not ds_info:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -421,7 +448,7 @@ async def get_dataset_decisions_endpoint(dataset_id: str):
     Returns dynamically computed evidence-backed decision findings,
     comparisons, concentration, trends, and anomalies for the requested dataset.
     """
-    ds_info = get_or_load_dataset(dataset_id)
+    ds_info = _get_session_dataset(dataset_id)
     if not ds_info:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,

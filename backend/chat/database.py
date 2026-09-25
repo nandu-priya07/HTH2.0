@@ -81,6 +81,7 @@ def initialize_database(db_path: Optional[Path] = None) -> None:
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 dataset_id TEXT,
+                owner_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -92,6 +93,8 @@ def initialize_database(db_path: Optional[Path] = None) -> None:
                 content TEXT NOT NULL,
                 result_json TEXT,
                 visualization_json TEXT,
+                intent_json TEXT,
+                query_spec_json TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (conversation_id)
                     REFERENCES conversations(id)
@@ -103,5 +106,38 @@ def initialize_database(db_path: Optional[Path] = None) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_conversations_updated_at 
                 ON conversations(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS auth_users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                display_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES auth_users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
+            CREATE TABLE IF NOT EXISTS chat_files (
+                file_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, file_id),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
         """)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)")}
+        if "owner_id" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_owner_updated ON conversations(owner_id, updated_at DESC)")
+        message_columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
+        if "intent_json" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN intent_json TEXT")
+        if "query_spec_json" not in message_columns:
+            conn.execute("ALTER TABLE messages ADD COLUMN query_spec_json TEXT")
         logger.info(f"Chat database initialized at {db_path or get_database_path()}")

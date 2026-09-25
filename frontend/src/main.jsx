@@ -10,9 +10,12 @@ import './styles/chat.css'
 import './styles/visualization.css'
 import './styles/pages.css'
 import App from './App.jsx'
+import AuthProvider from './state/AuthProvider.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <App />
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   </StrictMode>,
 )

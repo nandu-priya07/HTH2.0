@@ -57,12 +57,30 @@ async def execute_user_query(payload: QueryRequest):
 
     # 1. Initialize Chat Service & Conversation Session
     chat_service = get_chat_service()
+    requested_chat = chat_service.get_conversation(payload.conversation_id) if payload.conversation_id else None
+    if payload.conversation_id and not requested_chat:
+        raise HTTPException(status_code=404, detail="Chat not found for this session.")
+    allowed_datasets = set()
+    for owned_conversation in chat_service.list_conversations(limit=500):
+        if owned_conversation.dataset_id:
+            allowed_datasets.add(owned_conversation.dataset_id)
+        allowed_datasets.update(file.get("file_id") for file in chat_service.get_files(owned_conversation.id))
+    if payload.dataset_id and payload.dataset_id not in allowed_datasets:
+        raise HTTPException(status_code=403, detail="The selected dataset is not available in this session.")
     conversation = chat_service.handle_query_session(
         conversation_id=payload.conversation_id,
         user_message_text=raw_query,
         dataset_id=payload.dataset_id
     )
     cid = conversation.id
+
+    # Dataset IDs are accepted only when they are attached to one of this
+    # account's chats. This keeps the process-wide analysis cache from becoming
+    # a cross-account file browser.
+    if payload.conversation_id and payload.dataset_id:
+        current_files = {file.get("file_id") for file in chat_service.get_files(cid)}
+        if payload.dataset_id != conversation.dataset_id and payload.dataset_id not in current_files:
+            raise HTTPException(status_code=403, detail="The selected dataset is not attached to this chat.")
 
     # 2. Context Resolver Step (Requirement 5 & 6)
     resolved_spec, compact_context, selected_file_id = chat_service.resolve_query_context(

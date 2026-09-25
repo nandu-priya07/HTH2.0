@@ -102,16 +102,13 @@ export default function AnalystProvider({ children }) {
     }
   }, [])
 
-  // Initial load (isLoadingConversations starts true)
+  // The provider is keyed by account identity in App, so this initial request
+  // always belongs to one session and never mixes two accounts' chat state.
   useEffect(() => {
     let cancelled = false
     requestConversations()
       .then((list) => { if (!cancelled) setConversations(list) })
-      .catch((err) => {
-        if (cancelled) return
-        console.error('Failed to load conversations:', err)
-        setConversationsError('Failed to load conversations')
-      })
+      .catch(() => { if (!cancelled) setConversationsError('Failed to load conversations') })
       .finally(() => { if (!cancelled) setIsLoadingConversations(false) })
     return () => { cancelled = true }
   }, [])

@@ -7,6 +7,7 @@ from routes.query import router as query_router
 from routes.chat import router as chat_router
 from routes.explorer import router as explorer_router
 from chat.database import initialize_database
+from auth import AuthContextMiddleware, router as auth_router
 
 
 @asynccontextmanager
@@ -21,6 +22,7 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+app.add_middleware(AuthContextMiddleware)
 
 # Enable CORS for frontend interactions
 app.add_middleware(
@@ -36,6 +38,7 @@ app.include_router(upload_router)
 app.include_router(query_router)
 app.include_router(chat_router)
 app.include_router(explorer_router)
+app.include_router(auth_router)
 
 
 @app.get("/")

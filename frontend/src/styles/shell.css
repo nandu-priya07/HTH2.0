@@ -16,8 +16,9 @@
   border-bottom: 1px solid var(--video-border);
 }
 .topnav-inner {
+  width: min(100%, 1440px);
   height: var(--nav-height);
-  max-width: 1440px; margin: 0 auto;
+  margin: 0 auto;
   padding: 0 var(--container-pad);
   display: flex; align-items: center; gap: var(--space-6);
 }
@@ -55,11 +56,14 @@
 .topnav-link:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 
 .topnav-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.topnav-auth-link { padding: 0 7px; color: var(--video-muted); font-size: 12.5px; font-weight: var(--weight-semibold); white-space: nowrap; }
+.topnav-auth-link:hover { color: var(--video-text); text-decoration: none; }
 
 .dataset-status {
   display: inline-flex; align-items: center; gap: 7px;
   height: 34px; padding: 0 12px; margin-right: 6px;
-  max-width: 220px;
+  max-width: clamp(120px, 18vw, 220px);
+  min-width: 0;
   font-size: 12.5px; font-weight: var(--weight-semibold); color: var(--video-text);
   background: rgba(255, 255, 255, 0.85); border: 1px solid var(--video-border); border-radius: var(--radius-full);
   text-decoration: none !important;
@@ -126,6 +130,7 @@
 }
 .mobile-nav-link:hover { background: var(--color-bg-alt); }
 .mobile-nav-link.active { background: var(--teal-50); color: var(--color-primary); font-weight: var(--weight-semibold); box-shadow: inset 3px 0 0 var(--signal-analysis); }
+.mobile-nav-auth { display: flex; gap: 4px; border-top: var(--border); margin-top: 8px; padding-top: 8px; }
 
 @media (max-width: 1180px) {
   .topnav-link { padding: 0 9px; font-size: 13px; }
@@ -134,14 +139,16 @@
 }
 @media (max-width: 1020px) {
   .topnav-links { display: none; }
+  .topnav-auth-link { display: none; }
   .topnav-menu-btn { display: inline-flex; }
   .mobile-nav { display: flex; }
   .topnav-actions { margin-left: auto; }
 }
 @media (max-width: 560px) {
-  .dataset-status-text { display: none; }
-  .dataset-status { padding: 0 10px; }
-  .topnav-actions .popover:first-of-type { display: none; }
+  .topnav-inner { gap: var(--space-3); }
+  .topnav-actions { gap: 2px; }
+  .dataset-status { max-width: clamp(112px, 32vw, 145px); padding: 0 9px; margin-right: 2px; }
+  .topnav-actions .popover { display: none; }
 }
 
 /* ── Footer ── */

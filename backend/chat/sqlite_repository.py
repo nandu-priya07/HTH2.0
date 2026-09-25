@@ -21,8 +21,9 @@ class SqliteChatRepository(BaseChatRepository):
     SQLite-backed repository for conversation and message persistence.
     """
 
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None, owner_id: Optional[str] = None):
         self.db_path = db_path
+        self.owner_id = owner_id
         # Ensure database and tables are created on startup
         initialize_database(self.db_path)
 
@@ -39,10 +40,10 @@ class SqliteChatRepository(BaseChatRepository):
         with get_db_connection(self.db_path) as conn:
             conn.execute(
                 """
-                INSERT INTO conversations (id, title, dataset_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO conversations (id, title, dataset_id, owner_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (cid, title_clean, dataset_id, now, now)
+                (cid, title_clean, dataset_id, self.owner_id, now, now)
             )
 
         return Conversation(
@@ -55,13 +56,13 @@ class SqliteChatRepository(BaseChatRepository):
 
     def get_conversation(self, conversation_id: str) -> Optional[Conversation]:
         with get_db_connection(self.db_path) as conn:
+            sql = "SELECT id, title, dataset_id, created_at, updated_at FROM conversations WHERE id = ?"
+            params = [conversation_id]
+            if self.owner_id is not None:
+                sql += " AND owner_id = ?"
+                params.append(self.owner_id)
             cursor = conn.execute(
-                """
-                SELECT id, title, dataset_id, created_at, updated_at
-                FROM conversations
-                WHERE id = ?
-                """,
-                (conversation_id,)
+                sql, params
             )
             row = cursor.fetchone()
             if not row:
@@ -77,15 +78,14 @@ class SqliteChatRepository(BaseChatRepository):
 
     def list_conversations(self, limit: int = 100, offset: int = 0) -> List[Conversation]:
         with get_db_connection(self.db_path) as conn:
-            cursor = conn.execute(
-                """
-                SELECT id, title, dataset_id, created_at, updated_at
-                FROM conversations
-                ORDER BY updated_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset)
-            )
+            sql = "SELECT id, title, dataset_id, created_at, updated_at FROM conversations"
+            params = []
+            if self.owner_id is not None:
+                sql += " WHERE owner_id = ?"
+                params.append(self.owner_id)
+            sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
             return [
                 Conversation(
@@ -114,12 +114,8 @@ class SqliteChatRepository(BaseChatRepository):
 
         with get_db_connection(self.db_path) as conn:
             conn.execute(
-                """
-                UPDATE conversations
-                SET title = ?, dataset_id = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (new_title, new_dataset_id, now, conversation_id)
+                "UPDATE conversations SET title = ?, dataset_id = ?, updated_at = ? WHERE id = ?" + (" AND owner_id = ?" if self.owner_id is not None else ""),
+                (new_title, new_dataset_id, now, conversation_id, self.owner_id) if self.owner_id is not None else (new_title, new_dataset_id, now, conversation_id)
             )
 
         return Conversation(
@@ -133,21 +129,19 @@ class SqliteChatRepository(BaseChatRepository):
     def update_conversation_timestamp(self, conversation_id: str) -> bool:
         now = utc_now_iso()
         with get_db_connection(self.db_path) as conn:
-            cursor = conn.execute(
-                """
-                UPDATE conversations
-                SET updated_at = ?
-                WHERE id = ?
-                """,
-                (now, conversation_id)
-            )
+            sql = "UPDATE conversations SET updated_at = ? WHERE id = ?" + (" AND owner_id = ?" if self.owner_id is not None else "")
+            params = (now, conversation_id, self.owner_id) if self.owner_id is not None else (now, conversation_id)
+            cursor = conn.execute(sql, params)
             return cursor.rowcount > 0
 
     def delete_conversation(self, conversation_id: str) -> bool:
         with get_db_connection(self.db_path) as conn:
             # Delete messages first (or rely on foreign key cascade)
+            if self.owner_id is not None and not self.get_conversation(conversation_id):
+                return False
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
-            cursor = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+            sql = "DELETE FROM conversations WHERE id = ?" + (" AND owner_id = ?" if self.owner_id is not None else "")
+            cursor = conn.execute(sql, (conversation_id, self.owner_id) if self.owner_id is not None else (conversation_id,))
             return cursor.rowcount > 0
 
     def create_message(
@@ -162,6 +156,8 @@ class SqliteChatRepository(BaseChatRepository):
         query_spec: Optional[Dict[str, Any]] = None,
         file_id: Optional[str] = None
     ) -> Message:
+        if not self.get_conversation(conversation_id):
+            raise ValueError("Conversation was not found for this account.")
         mid = message_id or str(uuid.uuid4())
         now = utc_now_iso()
         role_clean = (role or "user").strip().lower()
@@ -170,14 +166,16 @@ class SqliteChatRepository(BaseChatRepository):
 
         res_str = json.dumps(result_json) if result_json is not None else None
         vis_str = json.dumps(visualization_json) if visualization_json is not None else None
+        intent_str = json.dumps(intent) if intent is not None else None
+        query_spec_str = json.dumps(query_spec) if query_spec is not None else None
 
         with get_db_connection(self.db_path) as conn:
             conn.execute(
                 """
-                INSERT INTO messages (id, conversation_id, role, content, result_json, visualization_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO messages (id, conversation_id, role, content, result_json, visualization_json, intent_json, query_spec_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (mid, conversation_id, role_clean, content, res_str, vis_str, now)
+                (mid, conversation_id, role_clean, content, res_str, vis_str, intent_str, query_spec_str, now)
             )
             # Update parent conversation updated_at
             conn.execute(
@@ -203,14 +201,16 @@ class SqliteChatRepository(BaseChatRepository):
         )
 
     def get_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[Message]:
+        if not self.get_conversation(conversation_id):
+            return []
         with get_db_connection(self.db_path) as conn:
             if limit and limit > 0:
                 # Fetch latest `limit` messages in chronological order
                 cursor = conn.execute(
                     """
-                    SELECT id, conversation_id, role, content, result_json, visualization_json, created_at
+                    SELECT id, conversation_id, role, content, result_json, visualization_json, intent_json, query_spec_json, created_at
                     FROM (
-                        SELECT id, conversation_id, role, content, result_json, visualization_json, created_at
+                        SELECT id, conversation_id, role, content, result_json, visualization_json, intent_json, query_spec_json, created_at
                         FROM messages
                         WHERE conversation_id = ?
                         ORDER BY created_at DESC
@@ -223,7 +223,7 @@ class SqliteChatRepository(BaseChatRepository):
             else:
                 cursor = conn.execute(
                     """
-                    SELECT id, conversation_id, role, content, result_json, visualization_json, created_at
+                    SELECT id, conversation_id, role, content, result_json, visualization_json, intent_json, query_spec_json, created_at
                     FROM messages
                     WHERE conversation_id = ?
                     ORDER BY created_at ASC
@@ -248,6 +248,15 @@ class SqliteChatRepository(BaseChatRepository):
                     except Exception:
                         vis_val = None
 
+                intent_val = None
+                if row["intent_json"]:
+                    try: intent_val = json.loads(row["intent_json"])
+                    except Exception: intent_val = None
+                query_spec_val = None
+                if row["query_spec_json"]:
+                    try: query_spec_val = json.loads(row["query_spec_json"])
+                    except Exception: query_spec_val = None
+
                 messages.append(
                     Message(
                         id=row["id"],
@@ -256,6 +265,8 @@ class SqliteChatRepository(BaseChatRepository):
                         content=row["content"],
                         result_json=res_val,
                         visualization_json=vis_val,
+                        intent=intent_val,
+                        query_spec=query_spec_val,
                         created_at=row["created_at"]
                     )
                 )
@@ -263,5 +274,43 @@ class SqliteChatRepository(BaseChatRepository):
 
     def delete_message(self, message_id: str) -> bool:
         with get_db_connection(self.db_path) as conn:
-            cursor = conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            if self.owner_id is None:
+                cursor = conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            else:
+                cursor = conn.execute("DELETE FROM messages WHERE id = ? AND conversation_id IN (SELECT id FROM conversations WHERE owner_id = ?)", (message_id, self.owner_id))
             return cursor.rowcount > 0
+
+    def add_file(self, conversation_id: str, file_meta: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.get_conversation(conversation_id):
+            raise ValueError("Conversation was not found for this account.")
+        metadata = dict(file_meta)
+        with get_db_connection(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO chat_files(file_id,conversation_id,metadata_json,created_at) VALUES(?,?,?,?)",
+                (metadata["file_id"], conversation_id, json.dumps(metadata), metadata.get("created_at") or utc_now_iso()),
+            )
+        return metadata
+
+    def get_files(self, conversation_id: str) -> List[Dict[str, Any]]:
+        if not self.get_conversation(conversation_id):
+            return []
+        with get_db_connection(self.db_path) as conn:
+            rows = conn.execute("SELECT metadata_json FROM chat_files WHERE conversation_id=? ORDER BY created_at ASC", (conversation_id,)).fetchall()
+        files = []
+        for row in rows:
+            try: files.append(json.loads(row["metadata_json"]))
+            except (ValueError, TypeError): continue
+        return files
+
+    def delete_file(self, conversation_id: str, file_id: str) -> bool:
+        if not self.get_conversation(conversation_id):
+            return False
+        with get_db_connection(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM chat_files WHERE conversation_id=? AND file_id=?", (conversation_id, file_id))
+            return cursor.rowcount > 0
+
+    def get_chat_json(self, conversation_id: str):
+        conversation = self.get_conversation(conversation_id)
+        if not conversation: return None
+        return {**conversation.to_dict(), "chat_id": conversation.id, "files": self.get_files(conversation_id),
+            "messages": [message.to_dict() for message in self.get_messages(conversation_id)]}
