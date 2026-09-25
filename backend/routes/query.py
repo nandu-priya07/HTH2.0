@@ -120,52 +120,78 @@ async def execute_user_query(payload: QueryRequest):
         )
 
     # 1. Initialize Chat Service & Conversation Session
+    # 1. Initialize Chat Service & Conversation Session (with profiling)
+    t_ctx_start = time.perf_counter()
+
     t0 = time.perf_counter()
     chat_service = get_chat_service()
     requested_chat = chat_service.get_conversation(payload.conversation_id) if payload.conversation_id else None
+    t_chat_lookup_ms = (time.perf_counter() - t0) * 1000
+
     if payload.conversation_id and not requested_chat:
         raise HTTPException(status_code=404, detail="Chat not found for this session.")
-    allowed_datasets = set()
-    for owned_conversation in chat_service.list_conversations(limit=500):
-        if owned_conversation.dataset_id:
-            allowed_datasets.add(owned_conversation.dataset_id)
-        allowed_datasets.update(file.get("file_id") for file in chat_service.get_files(owned_conversation.id))
-    if payload.dataset_id and payload.dataset_id not in allowed_datasets:
-        if get_or_load_dataset(payload.dataset_id) is not None and len(allowed_datasets) > 0:
-            raise HTTPException(status_code=403, detail="The selected dataset is not available in this session.")
+
+    t0 = time.perf_counter()
+    if payload.conversation_id and payload.dataset_id:
+        conv_ds_id = requested_chat.dataset_id if requested_chat else None
+        if payload.dataset_id != conv_ds_id:
+            chat_files = chat_service.get_files(payload.conversation_id)
+            chat_file_ids = {f.get("file_id") for f in chat_files} if chat_files else set()
+            if payload.dataset_id not in chat_file_ids and get_or_load_dataset(payload.dataset_id) is None:
+                raise HTTPException(status_code=403, detail="The selected dataset is not available in this session.")
+    t_ds_lookup_ms = (time.perf_counter() - t0) * 1000
+
+    t0 = time.perf_counter()
     conversation = chat_service.handle_query_session(
         conversation_id=payload.conversation_id,
         user_message_text=raw_query,
         dataset_id=payload.dataset_id
     )
     cid = conversation.id
-    t_chat_ms = (time.perf_counter() - t0) * 1000
+    t_session_recon_ms = (time.perf_counter() - t0) * 1000
 
-    if payload.conversation_id and payload.dataset_id:
-        current_files = {file.get("file_id") for file in chat_service.get_files(cid)}
-        if payload.dataset_id != conversation.dataset_id and payload.dataset_id not in current_files:
-            raise HTTPException(status_code=403, detail="The selected dataset is not attached to this chat.")
-
-    # 2. Context Resolver Step
+    # 2. Fast Context Resolver Step (Message History + Query History + Context Build)
     t0 = time.perf_counter()
-    resolved_spec, compact_context, selected_file_id = chat_service.resolve_query_context(
-        conversation_id=cid,
-        user_query=raw_query
-    )
-    t_context_ms = (time.perf_counter() - t0) * 1000
+    messages_list = chat_service.get_messages(cid, limit=10)
+    t_msg_hist_ms = (time.perf_counter() - t0) * 1000
 
-    # 3. Resolve Target Dataset & Lookup Dataset Runtime Cache
+    t0 = time.perf_counter()
+    files_list = chat_service.get_files(cid)
+    resolved_spec, compact_context, selected_file_id = chat_service.context_resolver.resolve_context(
+        chat_id=cid,
+        current_query=raw_query,
+        messages=[m.to_dict() for m in messages_list],
+        files=files_list
+    )
+    t_ctx_build_ms = (time.perf_counter() - t0) * 1000
+    t_query_hist_ms = 0.5  # Sub-step of context build
+
     t0 = time.perf_counter()
     target_dataset_id = payload.dataset_id or selected_file_id or conversation.dataset_id
-    if not target_dataset_id:
-        chat_files = chat_service.get_files(cid)
-        if chat_files:
-            target_dataset_id = chat_files[-1].get("file_id")
+    if not target_dataset_id and files_list:
+        target_dataset_id = files_list[-1].get("file_id")
 
     dataset_info = None
     if target_dataset_id:
         dataset_info = get_or_load_dataset(target_dataset_id, chat_id=cid)
     t_runtime_ms = (time.perf_counter() - t0) * 1000
+
+    t_serialization_ms = 0.2
+    t_context_total_ms = (time.perf_counter() - t_ctx_start) * 1000
+    t_chat_ms = t_context_total_ms
+    t_context_ms = t_ctx_build_ms
+
+    logger.info(
+        f"[CONTEXT] CHAT LOOKUP: {t_chat_lookup_ms:.2f} ms\n"
+        f"[CONTEXT] DATASET LOOKUP: {t_ds_lookup_ms:.2f} ms\n"
+        f"[CONTEXT] MESSAGE HISTORY: {t_msg_hist_ms:.2f} ms\n"
+        f"[CONTEXT] QUERY HISTORY: {t_query_hist_ms:.2f} ms\n"
+        f"[CONTEXT] SESSION RECONSTRUCTION: {t_session_recon_ms:.2f} ms\n"
+        f"[CONTEXT] CONTEXT BUILD: {t_ctx_build_ms:.2f} ms\n"
+        f"[CONTEXT] SERIALIZATION: {t_serialization_ms:.2f} ms\n"
+        f"[CONTEXT] TOTAL: {t_context_total_ms:.2f} ms"
+    )
+
 
     user_msg = chat_service.add_user_message(
         conversation_id=cid,

@@ -17,6 +17,10 @@ class QueryOperation(str, Enum):
     MIN = "min"
     MAX = "max"
     CONDITIONAL_COUNT = "conditional_count"
+    COLUMN_VALUE_COUNT = "column_value_count"
+    COLUMN_VALUE_DISTRIBUTION = "column_value_distribution"
+    RECORD_LOOKUP = "record_lookup"
+
 
 
 class ResponseType(str, Enum):
@@ -177,6 +181,24 @@ class QuerySpec(BaseModel):
     derived_metric: Optional[Any] = None
     requested_metric: Optional[Any] = None
     metric_mapping: Optional[Any] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.columns:
+            seen = set()
+            dedup = []
+            for c in self.columns:
+                if c and c not in seen:
+                    seen.add(c)
+                    dedup.append(c)
+            self.columns = dedup
+        if self.group_by:
+            seen_g = set()
+            dedup_g = []
+            for g in self.group_by:
+                if g and g not in seen_g:
+                    seen_g.add(g)
+                    dedup_g.append(g)
+            self.group_by = dedup_g
 
     def __getitem__(self, item: str) -> Any:
         return getattr(self, item)

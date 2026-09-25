@@ -17,9 +17,13 @@ SUPPORTED_OPERATIONS = {
     "min",
     "max",
     "conditional_count",
+    "column_value_count",
+    "column_value_distribution",
     "multi_column_value_distribution",
-    "value_distribution"
+    "value_distribution",
+    "record_lookup"
 }
+
 
 NUMERIC_OPERATIONS = {
     "sum",
@@ -55,18 +59,31 @@ def validate_query_spec(
 
     df_col_lower_map = {c.lower(): c for c in df.columns}
 
-    # 1. Validate conditional_count
-    if op == "conditional_count":
+    # 0. Validate record_lookup
+    if op == "record_lookup":
+        if spec.columns:
+            for col in spec.columns:
+                if col.lower() not in df_col_lower_map:
+                    return False, f"Column '{col}' does not exist in dataset."
+        if spec.filters:
+            for f in spec.filters:
+                col_name = f.get("column") if isinstance(f, dict) else f.column
+                if not col_name or col_name.lower() not in df_col_lower_map:
+                    return False, f"Filter column '{col_name}' does not exist in dataset."
+        return True, None
+
+    # 1. Validate conditional_count / column_value_count
+    if op in ("conditional_count", "column_value_count"):
         target_cols = spec.columns or ([spec.column] if spec.column else [])
         if not target_cols:
-            return False, "Operation 'conditional_count' requires at least one target column in 'columns' or 'column'."
+            return False, f"Operation '{op}' requires at least one target column in 'columns' or 'column'."
 
         for col in target_cols:
             if col.lower() not in df_col_lower_map:
                 return False, f"Column '{col}' does not exist in dataset."
 
         if not spec.condition:
-            return False, "Operation 'conditional_count' requires a 'condition' specifying operator and value."
+            return False, f"Operation '{op}' requires a 'condition' specifying operator and value."
 
         cond_op = str(spec.condition.get("operator", "equals") if isinstance(spec.condition, dict) else spec.condition.operator).lower()
         if cond_op not in VALID_CONDITION_OPERATORS:
@@ -78,8 +95,8 @@ def validate_query_spec(
 
         return True, None
 
-    # 2. Validate multi_column_value_distribution and value_distribution
-    if op in ("multi_column_value_distribution", "value_distribution"):
+    # 2. Validate multi_column_value_distribution, value_distribution, and column_value_distribution
+    if op in ("multi_column_value_distribution", "value_distribution", "column_value_distribution"):
         target_cols = spec.columns or ([spec.column] if spec.column else [])
         if not target_cols:
             return False, f"Operation '{op}' requires at least one target column in 'columns' or 'column'."
@@ -95,6 +112,7 @@ def validate_query_spec(
                 return False, f"Unsupported condition operator '{cond_op}'."
 
         return True, None
+
 
     # 3. Validate single column / columns for standard operations
     if spec.column:

@@ -228,9 +228,15 @@ def _finalize_result(result: QueryResult, spec: QuerySpec, exec_spec: QuerySpec,
         meta["fields_used"] = fields
     result.fields_used = fields or None
 
-    result.filters_applied = meta.get("filters_applied") or [
-        f.to_dict() if hasattr(f, "to_dict") else f for f in (spec.filters or [])
-    ]
+    op = (exec_spec.operation or "").lower()
+    if op in ("column_value_count", "column_value_distribution", "multi_column_value_distribution", "value_distribution"):
+        # For column-wise analysis, DO NOT fabricate row-level filters
+        result.filters_applied = meta.get("filters_applied", [])
+    else:
+        result.filters_applied = meta.get("filters_applied") or [
+            f.to_dict() if hasattr(f, "to_dict") else f for f in (spec.filters or [])
+        ]
+
     result.rows_before_filter = meta.get("rows_before_filter", meta.get("rows_analyzed"))
     result.rows_after_filter = meta.get("rows_after_filter", meta.get("filtered_rows"))
     result.aggregation = meta.get("aggregation") or (exec_spec.operation or "").upper() or None
@@ -366,15 +372,86 @@ def _execute_query_core(spec: QuerySpec, df: pd.DataFrame, filter_trace: Optiona
     filters_applied = [f.to_dict() if hasattr(f, 'to_dict') else f for f in (spec.filters or [])]
     op = (spec.operation or "count").lower().strip()
 
+    # 3b. RECORD_LOOKUP Operation
+    if op == "record_lookup":
+        rec_cols = []
+        for c in (target_cols if target_cols else (spec.columns or [])):
+            resolved_c = _resolve_col(c)
+            if resolved_c and resolved_c in df_copy.columns and resolved_c not in rec_cols:
+                rec_cols.append(resolved_c)
+
+        if not rec_cols:
+            rec_cols = list(df_copy.columns)
+
+        records_list = df_copy[rec_cols].to_dict(orient="records")
+
+        # Clean NaN and numpy data types for clean JSON response
+        for r in records_list:
+            for k, v in list(r.items()):
+                if pd.isna(v):
+                    r[k] = None
+                elif isinstance(v, (np.integer, np.int64)):
+                    r[k] = int(v)
+                elif isinstance(v, (np.floating, np.float64)):
+                    r[k] = float(v)
+
+        table_headers = list(rec_cols)
+        table_rows = [[r.get(h) for h in table_headers] for r in records_list]
+
+        summary_text = f"Retrieved **{len(records_list)}** record(s) matching criteria."
+
+        canonical_result = {
+            "intent": "record_lookup",
+            "records": records_list
+        }
+
+        return QueryResult(
+            success=True,
+            type=ResponseType.DATA_RESULT.value,
+            query={
+                "intent": "record_lookup",
+                "operation": "record_lookup",
+                "filters": filters_applied,
+                "columns": rec_cols
+            },
+            result=canonical_result,
+            table={
+                "headers": table_headers,
+                "rows": table_rows
+            },
+            text=summary_text,
+            metadata={
+                "intent": "record_lookup",
+                "rows_analyzed": total_rows,
+                "filtered_rows": len(records_list),
+                "fields_used": rec_cols,
+                "filters_applied": filters_applied,
+                "aggregation": "RECORD LOOKUP",
+                "returned_records": len(records_list)
+            },
+            calculation_steps=[
+                f"Applied filter(s): {', '.join([_format_filter_step(f) for f in filters_applied]) if filters_applied else 'None'}.",
+                f"Retrieved {len(records_list)} matching record(s)."
+            ]
+        )
+
     # 4. CONDITIONAL_COUNT across multiple or single columns
-    if op == "conditional_count":
-        eval_cols = target_cols if target_cols else ([target_col] if target_col else [])
+    # 4. CONDITIONAL_COUNT / COLUMN_VALUE_COUNT across multiple or single columns
+    if op in ("conditional_count", "column_value_count"):
+        seen_cols = set()
+        eval_cols = []
+        for c in (target_cols if target_cols else ([target_col] if target_col else [])):
+            if c and c not in seen_cols:
+                seen_cols.add(c)
+                eval_cols.append(c)
+
         cond = spec.condition or {}
         cond_op = str(cond.get("operator", "equals") if isinstance(cond, dict) else getattr(cond, "operator", "equals")).lower()
         cond_val = cond.get("value") if isinstance(cond, dict) else getattr(cond, "value", None)
 
         records = []
         rows = []
+        canonical_rows = []
         for col in eval_cols:
             cnt = _count_column_condition(df_copy[col], cond_op, cond_val)
             records.append({
@@ -382,6 +459,7 @@ def _execute_query_core(spec: QuerySpec, df: pd.DataFrame, filter_trace: Optiona
                 "condition": cond_val,
                 "count": cnt
             })
+            canonical_rows.append({"column": col, "count": cnt})
             rows.append([col, cond_val, cnt])
 
         table_payload = {
@@ -390,29 +468,50 @@ def _execute_query_core(spec: QuerySpec, df: pd.DataFrame, filter_trace: Optiona
         }
 
         cols_count = len(eval_cols)
-        summary_text = f"Calculated **{cond_val}** counts across **{cols_count}** columns ({filtered_rows:,} rows analyzed):"
+        summary_text = f"Count of grade **{cond_val}** across **{cols_count}** subject columns ({filtered_rows:,} rows analyzed)."
+
+        canonical_result = {
+            "intent": "column_value_count",
+            "condition": cond_val,
+            "rows": canonical_rows
+        }
 
         return QueryResult(
             success=True,
             type=ResponseType.DATA_RESULT.value,
             query={
-                "operation": op,
+                "intent": "column_value_count",
+                "operation": "column_value_count",
                 "columns": eval_cols,
                 "condition": {"operator": cond_op, "value": cond_val}
             },
-            result=records,
+            result=canonical_result,
             table=table_payload,
             text=summary_text,
             metadata={
+                "intent": "column_value_count",
+                "condition": f"value == \"{cond_val}\" per subject column",
                 "rows_analyzed": total_rows,
                 "filtered_rows": filtered_rows,
+                "fields_used": eval_cols,
+                "aggregation": "COUNT PER COLUMN",
                 "columns_analyzed": cols_count
-            }
+            },
+            calculation_steps=[
+                f"Identified {cols_count} unique subject columns.",
+                f"Counted occurrences of grade '{cond_val}' independently per subject column."
+            ]
         )
 
-    # 4b. MULTI_COLUMN_VALUE_DISTRIBUTION & VALUE_DISTRIBUTION
-    if op in ("multi_column_value_distribution", "value_distribution"):
-        eval_cols = target_cols if target_cols else ([target_col] if target_col else [])
+    # 4b. COLUMN_VALUE_DISTRIBUTION / MULTI_COLUMN_VALUE_DISTRIBUTION & VALUE_DISTRIBUTION
+    if op in ("multi_column_value_distribution", "value_distribution", "column_value_distribution"):
+        seen_cols = set()
+        eval_cols = []
+        for c in (target_cols if target_cols else ([target_col] if target_col else [])):
+            if c and c not in seen_cols:
+                seen_cols.add(c)
+                eval_cols.append(c)
+
         if not eval_cols:
             return QueryResult(
                 success=False,
@@ -461,68 +560,60 @@ def _execute_query_core(spec: QuerySpec, df: pd.DataFrame, filter_trace: Optiona
 
         distinct_vals = sorted(list(all_distinct_vals_set), key=_grade_sort_key)
 
-        records = []
-        rows = []
+        canonical_rows = []
+        table_rows = []
         for col in eval_cols:
             counts = col_value_counts.get(col, pd.Series(dtype=int))
-            row = [col]
+            dist_map = {}
+            t_row = [col]
             for val in distinct_vals:
                 c = int(counts.get(val, 0))
-                records.append({
-                    "subject": col,
-                    "column": col,
-                    "grade": val,
-                    "value": val,
-                    "count": c
-                })
-                row.append(c)
-            rows.append(row)
+                dist_map[val] = c
+                t_row.append(c)
+            canonical_rows.append({
+                "column": col,
+                "distribution": dist_map
+            })
+            table_rows.append(t_row)
 
         headers = ["Subject"] + [str(v) for v in distinct_vals]
         table_payload = {
             "headers": headers,
-            "rows": rows
+            "rows": table_rows
         }
 
         cols_count = len(eval_cols)
-        distinct_count = len(distinct_vals)
-        if cond_val is not None:
-            summary_text = f"Calculated grade distribution for **{cond_val}** across **{cols_count}** subjects ({filtered_rows:,} rows analyzed):"
-        elif cols_count == 1:
-            summary_text = f"Calculated grade distribution for **{eval_cols[0]}** ({filtered_rows:,} rows analyzed, {distinct_count} distinct grades):"
-        else:
-            summary_text = f"Calculated grade distribution across **{cols_count}** subjects ({filtered_rows:,} rows analyzed, {distinct_count} distinct grades):"
+        summary_text = f"Grade distribution across **{cols_count}** subject columns ({filtered_rows:,} rows analyzed)."
 
-        cond_dict = {"operator": cond_op, "value": cond_val} if cond_val is not None else None
+        canonical_result = {
+            "intent": "column_value_distribution",
+            "rows": canonical_rows
+        }
 
         return QueryResult(
             success=True,
             type=ResponseType.DATA_RESULT.value,
             query={
-                "operation": op,
+                "intent": "column_value_distribution",
+                "operation": "column_value_distribution",
                 "columns": eval_cols,
-                "column": eval_cols[0] if len(eval_cols) == 1 else None,
-                "condition": cond_dict,
-                "group_by": [],
-                "filters": [f.to_dict() if hasattr(f, "to_dict") else f for f in spec.filters],
-                "measure": "count",
-                "value_distribution": True,
                 "raw_question": spec.raw_question
             },
-            result=records,
+            result=canonical_result,
             table=table_payload,
             text=summary_text,
             metadata={
+                "intent": "column_value_distribution",
                 "rows_analyzed": total_rows,
                 "filtered_rows": filtered_rows,
-                "rows_before_filter": total_rows,
-                "rows_after_filter": filtered_rows,
-                "fields_used": fields_used,
-                "filters_applied": filters_applied,
-                "columns_analyzed": cols_count,
-                "distinct_values_count": distinct_count,
-                "query_plan": spec.to_dict()
-            }
+                "fields_used": eval_cols,
+                "aggregation": "GROUP BY VALUE PER COLUMN",
+                "columns_analyzed": cols_count
+            },
+            calculation_steps=[
+                f"Identified {cols_count} unique subject columns.",
+                f"Calculated grade distribution independently for each subject column."
+            ]
         )
 
     # 5. Group-By Execution

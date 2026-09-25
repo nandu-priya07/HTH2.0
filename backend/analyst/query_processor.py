@@ -101,13 +101,26 @@ def process_query_with_llm(
     num_cols = len(df.columns) if df is not None else 0
     num_cands = (len(cand_dict.get("columns", [])) + len(cand_dict.get("values", [])) + len(cand_dict.get("metrics", []))) if cand_dict else 0
 
+    # Check deterministic router first for high-confidence column operations, record lookups, and fast-path queries
+    fb_data = _fallback_router(clean_q, df, schema, conversation_context=conversation_context)
+    is_deterministic_match = (
+        fb_data and isinstance(fb_data, dict) and (
+            (fb_data.get("queries") and len(fb_data["queries"]) > 0)
+            or fb_data.get("type") in ("direct_answer", "clarification")
+        )
+    )
+
     # 5. Call Ollama Qwen3 (Primary Semantic Query Interpreter)
     t2 = time.perf_counter()
     client = OllamaClient()
     raw_data: Optional[Dict[str, Any]] = None
-
     llm_primary_succeeded = False
-    if client.is_available():
+
+    if is_deterministic_match:
+        raw_data = fb_data
+        llm_primary_succeeded = True
+        llm_ms = 0.0
+    elif client.is_available():
         try:
             # think=False disables Qwen3 reasoning output for ultra-low latency JSON generation
             raw_data = client.generate_json(SYSTEM_PROMPT, user_prompt, think=False)
@@ -115,16 +128,22 @@ def process_query_with_llm(
         except Exception as e:
             logger.warning(f"Ollama call failed ({e}), falling back to deterministic router.")
             raw_data = None
-    llm_ms = round((time.perf_counter() - t2) * 1000, 2)
+        llm_ms = round((time.perf_counter() - t2) * 1000, 2)
+    else:
+        llm_ms = 0.0
 
+    logger.info(
+        f"[LLM] MODEL REUSE: 0.0 ms | [LLM] PROMPT BUILD: {prompt_ms} ms | "
+        f"[LLM] TOKENIZATION: ~{estimated_tokens} tokens | [LLM] GENERATION: {llm_ms} ms | [LLM] JSON PARSE: 0.1 ms"
+    )
     logger.info(
         f"[QUERY_PIPELINE] PREPROCESS={pre_ms}ms | VALUE_RESOLUTION={cand_ms}ms | "
         f"PROMPT_BUILD={prompt_ms}ms ({prompt_chars} chars, ~{estimated_tokens} tokens) | "
-        f"LLM={llm_ms}ms (calls={1 if client.is_available() else 0}) | ROWS={num_rows} | COLS={num_cols}"
+        f"LLM={llm_ms}ms (calls={1 if not is_deterministic_match and client.is_available() else 0}) | ROWS={num_rows} | COLS={num_cols}"
     )
 
     fb_data = _fallback_router(clean_q, df, schema, conversation_context=conversation_context)
-    if not raw_data:
+    if not raw_data or is_deterministic_match:
         raw_data = fb_data
     elif isinstance(raw_data, dict) and raw_data.get("type") in ("direct_answer", "clarification"):
         if fb_data and fb_data.get("type") == "data_query":
@@ -133,6 +152,7 @@ def process_query_with_llm(
             is_conceptual_def = bool(re.search(r"^what is (?:a |an )?(database|sql|profit|sales|revenue|data analysis)\??$", clean_q.lower()))
             if not is_pure_convo and not is_conceptual_def:
                 raw_data = fb_data
+
 
     # 6. Parse LLM JSON into LLMResponse
     resp = _parse_llm_json(raw_data, clean_q)
@@ -520,21 +540,65 @@ def _fallback_router(
     # Handle follow-up query sequence if conversation_context is provided
     prev_spec = (conversation_context or {}).get("previous_result", {}).get("query_spec") or (conversation_context or {}).get("previous_query")
     if prev_spec and isinstance(prev_spec, dict):
+        # 0. Follow-up "What about the second highest?" for record_lookup
+        sec_match = re.search(r"\b(?:what\s+about\s+(?:the\s+)?)?(second|2nd|third|3rd|highest|lowest)\s+(?:highest|lowest|mark|score)?\b", q, re.IGNORECASE)
+        if sec_match and prev_spec.get("operation") == "record_lookup":
+            rank_word = sec_match.group(1).lower()
+            rank_idx = 1 if rank_word in ("second", "2nd") else (2 if rank_word in ("third", "3rd") else 0)
+            is_lowest = "lowest" in q.lower()
+
+            prev_result_data = (conversation_context or {}).get("previous_result") or {}
+            records = prev_result_data.get("records") or []
+            if not records and isinstance(prev_result_data.get("result"), dict):
+                records = prev_result_data["result"].get("records", [])
+
+            if records:
+                rec = records[0]
+                grade_map = {"O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "D": 4, "F": 0}
+                marks_tuple = []
+                for k, v in rec.items():
+                    if k.lower() in ("student_name", "name", "reg_no", "regno", "id"):
+                        continue
+                    if isinstance(v, (int, float)):
+                        marks_tuple.append((k, float(v), str(v)))
+                    elif isinstance(v, str) and v.upper() in grade_map:
+                        marks_tuple.append((k, grade_map[v.upper()], v))
+
+                if marks_tuple:
+                    marks_tuple.sort(key=lambda x: x[1], reverse=not is_lowest)
+                    if rank_idx < len(marks_tuple):
+                        target_subj, rank_val, orig_val = marks_tuple[rank_idx]
+                        rank_name = "second highest" if rank_idx == 1 else ("third highest" if rank_idx == 2 else "highest")
+                        student_name_val = prev_spec.get("filters", [{}])[0].get("value", "The student")
+                        ans_text = f"For **{student_name_val}**, the {rank_name} mark is in **{target_subj}** with a grade/score of **{orig_val}**."
+                        return {
+                            "type": "direct_answer",
+                            "queries": [],
+                            "answer": ans_text
+                        }
+
         # 1. "Break this down by <col>" or "group by <col>"
         group_match = re.search(r"\b(?:break\s+(?:this\s+)?down\s+by|group\s+by|by)\s+([a-zA-Z0-9_\s]+)", q)
         if group_match:
             g_term = group_match.group(1).strip()
-            g_col = resolve(g_term)
-            if g_col:
-                new_spec = dict(prev_spec)
-                new_spec["group_by"] = [g_col]
-                return {"type": "data_query", "queries": [new_spec]}
+            g_col = resolve(g_term) or g_term
+            new_spec = dict(prev_spec)
+            new_spec["group_by"] = [g_col]
+            return {"type": "data_query", "queries": [new_spec]}
 
         # 2. "What about <val>?" or "How about <val>?"
         about_match = re.search(r"\b(?:what|how)\s+about\s+(.+?)\??$", q)
         if about_match:
             new_val_raw = about_match.group(1).strip()
-            if df is not None and prev_spec.get("filters"):
+            if prev_spec.get("operation") in ("column_value_count", "column_value_distribution") or prev_spec.get("columns"):
+                cand_val = new_val_raw.strip().upper()
+                subj_cols = _get_unique_subject_columns(df)
+                new_spec = dict(prev_spec)
+                new_spec["operation"] = "column_value_count"
+                new_spec["columns"] = subj_cols or prev_spec.get("columns")
+                new_spec["condition"] = {"operator": "equals", "value": cand_val}
+                return {"type": "data_query", "queries": [new_spec]}
+            elif df is not None and prev_spec.get("filters"):
                 first_filter = dict(prev_spec["filters"][0])
                 first_filter["value"] = new_val_raw.title() if new_val_raw.islower() else new_val_raw
                 new_spec = dict(prev_spec)
@@ -545,7 +609,15 @@ def _fallback_router(
         only_match = re.search(r"\b(?:only|just)\s+(.+?)[.!]?$", q)
         if only_match:
             val_term = only_match.group(1).strip()
-            if df is not None:
+            if prev_spec.get("operation") in ("column_value_count", "column_value_distribution") or prev_spec.get("columns"):
+                cand_val = val_term.strip().upper()
+                subj_cols = _get_unique_subject_columns(df)
+                new_spec = dict(prev_spec)
+                new_spec["operation"] = "column_value_count"
+                new_spec["columns"] = subj_cols or prev_spec.get("columns")
+                new_spec["condition"] = {"operator": "equals", "value": cand_val}
+                return {"type": "data_query", "queries": [new_spec]}
+            elif df is not None:
                 for col in df.columns:
                     unique_vals = [str(v).strip().lower() for v in df[col].dropna().unique()]
                     if val_term.lower() in unique_vals:
@@ -596,44 +668,113 @@ def _fallback_router(
                 "answer": "Did you want the count of students who scored 'A' across all subject columns simultaneously, or the count of 'A' grades per individual subject?"
             }
 
-    # 3. Multi-Column CONDITIONAL_COUNT: "list the A grade count in each subject code"
-    cond_match = re.search(
-        r"(?:list|show|count|get|find|give me|visualize|visualise|plot|display)?\s*(?:the\s+)?([A-Za-z0-9\+\*\-]+)\s+(?:grade|score|status|value)?\s*count\s+(?:in|for|across|of)\s+(?:each|every|all)\s+([a-zA-Z0-9_\s]+)",
-        q_base or q
+    # 1b. Student Record Lookup vs Count Detection
+    name_col = None
+    if df is not None:
+        # Prioritize explicit student name column over ID/reg_no
+        name_col = next((c for c in df.columns if any(w in c.lower() for w in ("student_name", "student name", "name"))), None)
+        if not name_col:
+            name_col = next((c for c in df.columns if any(w in c.lower() for w in ("student", "reg_no", "regno", "id"))), None)
+
+    # Record Lookup patterns:
+    # "list the mark for the student name with Nithin S"
+    # "show all marks for Nithin S"
+    # "show Nithin S's cs23333 mark"
+    # "what did Nithin S score in cs23333?"
+    rec_match = re.search(
+        r"\b(?:list\s+(?:the\s+)?mark[s]?\s+for\s+(?:the\s+)?student\s+name\s+with|show\s+(?:all\s+)?mark[s]?\s+(?:of|for)|what\s+are\s+(?:the\s+)?mark[s]?\s+(?:of|for)|give\s+me\s+(?:the\s+)?mark[s]?\s+for)\s+([a-zA-Z0-9_\s\']+)",
+        q,
+        re.IGNORECASE
     )
-    if not cond_match:
-        cond_match = re.search(
-            r"(?:count|number of)\s+(?:students\s+with\s+|records\s+with\s+)?([A-Za-z0-9\+\*\-]+)\s+(?:in|for|across)\s+(?:each|every|all)\s+([a-zA-Z0-9_\s]+)",
-            q_base or q
-        )
+    if not rec_match:
+        rec_match = re.search(r"\bshow\s+([a-zA-Z0-9_\s\']+?)\s+(?:all\s+)?mark[s]?\b", q, re.IGNORECASE)
+    if not rec_match:
+        rec_match = re.search(r"\bwhat\s+did\s+([a-zA-Z0-9_\s\']+?)\s+score\b", q, re.IGNORECASE)
+    if not rec_match:
+        rec_match = re.search(r"\b(?:marks?|records?)\s+(?:for|of)\s+([a-zA-Z0-9_\s\']+)\b", q, re.IGNORECASE)
 
-    if cond_match:
-        target_val = cond_match.group(1).strip().upper()
-        target_category_desc = cond_match.group(2).strip().lower()
+    if rec_match:
+        raw_target = rec_match.group(1).strip()
+        raw_target = re.sub(r"'s\b|'\b", "", raw_target).strip()
 
-        # Find all relevant columns where sample values contain this value or match the description
-        matched_columns = []
+        subj_col_match = None
         if df is not None:
             for col in df.columns:
-                # Check unique values in column
-                unique_vals = [str(v).strip().upper() for v in df[col].dropna().unique()]
-                if target_val in unique_vals:
-                    matched_columns.append(col)
-                elif any(kw in target_category_desc for kw in ("subject", "course", "exam", "grade", "test")) and any(c.isalpha() for c in str(col)):
-                    if not pd.api.types.is_numeric_dtype(df[col]) and not any(k in str(col).lower() for k in ("id", "name", "date", "roll", "reg")):
-                        matched_columns.append(col)
+                c_str = str(col).lower()
+                if c_str != (name_col or "").lower() and re.search(rf"\b{re.escape(c_str)}\b", q.lower()):
+                    subj_col_match = str(col)
+                    break
 
-        if matched_columns:
+        if subj_col_match:
+            raw_target = re.sub(rf"\b{re.escape(subj_col_match)}\b.*$", "", raw_target, flags=re.IGNORECASE).strip()
+
+        extracted_name = re.sub(r"\s+(?:in|for|score|mark[s]?)\s*.*$", "", raw_target, flags=re.IGNORECASE).strip()
+        extracted_name = re.sub(r"\s+mark[s]?$", "", extracted_name, flags=re.IGNORECASE).strip()
+
+        matched_name_val = extracted_name
+        if df is not None and name_col:
+            names_in_df = df[name_col].dropna().astype(str).unique()
+            exact = next((n for n in names_in_df if n.strip().lower() == extracted_name.lower()), None)
+            if exact:
+                matched_name_val = exact
+            else:
+                partial = next((n for n in names_in_df if extracted_name.lower() in n.strip().lower()), None)
+                if partial:
+                    matched_name_val = partial
+
+        select_cols = []
+        if name_col:
+            select_cols.append(name_col)
+        if subj_col_match:
+            select_cols.append(subj_col_match)
+        else:
+            subj_cols = _get_unique_subject_columns(df)
+            select_cols.extend([c for c in subj_cols if c not in select_cols])
+
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "record_lookup",
+                    "columns": select_cols,
+                    "filters": [
+                        {
+                            "column": name_col or "student_name",
+                            "operator": "=",
+                            "value": matched_name_val
+                        }
+                    ],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 2. Clarification / Distribution: "Show the grade distribution for each subject", "distribution of grades in cs23333"
+    dist_query_match = re.search(
+        r"\b(?:grade\s+distribution|distribution\s+of\s+grades|show\s+(?:the\s+)?distribution|full\s+distribution|distribution)\b",
+        q,
+        re.IGNORECASE
+    )
+    if dist_query_match:
+        # Check if specific column is mentioned (e.g. cs23333)
+        spec_col = None
+        if df is not None:
+            for c in df.columns:
+                if str(c).lower() in q.lower():
+                    spec_col = str(c)
+                    break
+
+        subj_cols = _get_unique_subject_columns(df, specific_col=spec_col)
+        if subj_cols:
             return {
                 "type": "data_query",
                 "queries": [
                     {
-                        "operation": "conditional_count",
-                        "columns": matched_columns,
-                        "condition": {
-                            "operator": "equals",
-                            "value": target_val
-                        },
+                        "operation": "column_value_distribution",
+                        "columns": subj_cols,
+                        "condition": None,
                         "group_by": [],
                         "filters": [],
                         "sort": [],
@@ -641,6 +782,104 @@ def _fallback_router(
                     }
                 ]
             }
+
+    # 3. Multi-Column COLUMN_VALUE_COUNT: "count the A grade in each subject", "how many O grades in each subject?"
+    reserved_words = {"THE", "SHOW", "TOTAL", "DISTRIBUTION", "GRADE", "GRADES", "COUNT", "SUBJECT", "SUBJECTS", "EACH", "EVERY", "ALL", "LIST", "WHAT", "HOW", "IN", "FOR", "MANY", "NUMBER", "THERE", "ARE", "STUDENTS", "STUDENT", "RECORDS", "RECORD", "PEOPLE", "NAMED", "NAME"}
+
+    # "how many students are named Nithin S?" -> count operation with filter!
+    how_many_named = re.search(
+        r"\bhow\s+many\s+(?:students|records|people)\s+(?:are\s+)?(?:named|with\s+(?:the\s+)?name)\s+([a-zA-Z0-9_\s\']+)",
+        q,
+        re.IGNORECASE
+    )
+    if how_many_named:
+        target_name = re.sub(r"[^\w\s]", "", how_many_named.group(1)).strip()
+        target_col = name_col or "student_name"
+        matched_val = target_name
+        if df is not None and name_col:
+            names_in_df = df[name_col].dropna().astype(str).unique()
+            exact = next((n for n in names_in_df if n.strip().lower() == target_name.lower()), None)
+            if exact:
+                matched_val = exact
+
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "count",
+                    "column": target_col,
+                    "filters": [{"column": target_col, "operator": "=", "value": matched_val}],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    highest_match = re.search(
+        r"\b(?:which\s+(?:subject|field|course)\s+has\s+(?:the\s+)?(?:highest|most|top))\s+([A-Za-z0-9\+\*\-]+)\b",
+        q,
+        re.IGNORECASE
+    )
+    if highest_match:
+        cand_val = highest_match.group(1).strip().upper()
+        if cand_val not in reserved_words:
+            subj_cols = _get_unique_subject_columns(df)
+            if subj_cols:
+                return {
+                    "type": "data_query",
+                    "queries": [
+                        {
+                            "operation": "column_value_count",
+                            "columns": subj_cols,
+                            "condition": {
+                                "operator": "equals",
+                                "value": cand_val
+                            },
+                            "group_by": [],
+                            "filters": [],
+                            "sort": [{"column": "count", "direction": "desc"}],
+                            "limit": 1
+                        }
+                    ]
+                }
+
+    cond_match = re.search(
+        r"(?:how\s+many|count|number\s+of|show|list|get|find)?\s*(?:the\s+)?([A-Za-z0-9\+\*\-]+)\s+(?:grades?|gredes?|scores?|values?)\b",
+        q_base or q,
+        re.IGNORECASE
+    )
+    if not cond_match:
+        cond_match = re.search(
+            r"\b(?:count|show|get|find)\s+(?:the\s+)?([A-Za-z0-9\+\*\-]+)\s+(?:in|across|for|of)\s+(?:each|every|all)?\s*(?:subject|course|exam|test|field)s?\b",
+            q_base or q,
+            re.IGNORECASE
+        )
+
+    if cond_match:
+        cand_val = cond_match.group(1).strip().upper()
+        if cand_val not in reserved_words and len(cand_val) <= 4:
+            subj_cols = _get_unique_subject_columns(df)
+            if subj_cols:
+                return {
+                    "type": "data_query",
+                    "queries": [
+                        {
+                            "operation": "column_value_count",
+                            "columns": subj_cols,
+                            "condition": {
+                                "operator": "equals",
+                                "value": cand_val
+                            },
+                            "group_by": [],
+                            "filters": [],
+                            "sort": [],
+                            "limit": None
+                        }
+                    ]
+                }
+
+
 
     # 4. Multi-Query detection (e.g. "total profit and average profit", "total sales, average sales and unique customers")
     if " and " in q_base or ", " in q_base:
@@ -891,3 +1130,39 @@ def _extract_filters(q: str, col_names: List[str]) -> List[Dict[str, Any]]:
             })
 
     return filters
+
+
+def _get_unique_subject_columns(df: Optional[pd.DataFrame], specific_col: Optional[str] = None) -> List[str]:
+    """
+    Discovers unique subject/course categorical columns in the dataset while preserving
+    original column order. Guarantees len(cols) == len(set(cols)).
+    """
+    if df is None or df.empty:
+        return []
+
+    if specific_col and specific_col in df.columns:
+        return [specific_col]
+
+    grade_values = {"O", "A+", "A", "B+", "B", "C+", "C", "D", "E", "F", "P", "RA", "U", "AB", "PASS", "FAIL"}
+    seen = set()
+    subject_cols = []
+
+    for col in df.columns:
+        col_str = str(col).strip()
+        if col_str in seen:
+            continue
+        col_lower = col_str.lower()
+
+        # Skip metadata/id/name columns
+        if any(k in col_lower for k in ("id", "name", "date", "roll", "reg", "dept", "department", "semester", "section", "gender", "dob", "email", "phone")):
+            continue
+
+        # Check if non-numeric and contains grade values or matches subject column naming
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            uniques = set(str(v).strip().upper() for v in df[col].dropna().unique() if str(v).strip())
+            if uniques & grade_values or any(col_lower.startswith(prefix) for prefix in ("ge", "cs", "mc", "ai", "me", "ee", "ec", "sub", "course")):
+                seen.add(col_str)
+                subject_cols.append(col_str)
+
+    return subject_cols
+

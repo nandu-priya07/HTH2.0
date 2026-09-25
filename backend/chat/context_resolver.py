@@ -158,6 +158,9 @@ class ContextResolver:
         and extracts the changed parameter value.
         """
         follow_up_triggers = [
+            r"\bbreak\s+(?:this\s+)?down\s+by\b",
+            r"\bbreak\s+down\b",
+            r"\bgroup\s+by\b",
             r"\bsimilarly\b",
             r"\bsame\b",
             r"\bdo\s+it\b",
@@ -173,6 +176,11 @@ class ContextResolver:
         ]
 
         has_trigger = any(re.search(t, q_lower) for t in follow_up_triggers)
+
+        # Check group_by follow-ups e.g. "break this down by cs23333", "group by subject"
+        group_match = re.search(r"\b(?:break\s+(?:this\s+)?down\s+by|group\s+by)\s+([a-zA-Z0-9_]+)", q_lower)
+        if group_match:
+            return True, "group_by", group_match.group(1).strip()
 
         # Multi-grade comparison pattern: e.g. "show only A and B", "compare O and A+", "only A and B"
         multi_match = re.search(
@@ -225,22 +233,34 @@ class ContextResolver:
         file_id: Optional[str]
     ) -> QuerySpec:
 
-        prev_op = prev_spec_dict.get("operation", "conditional_count")
+        prev_op = prev_spec_dict.get("operation", "column_value_count")
         col = prev_spec_dict.get("column")
         cols = prev_spec_dict.get("columns") or []
         group_by = prev_spec_dict.get("group_by") or []
 
-        # Determine operation and condition when inheriting
-        if param_type == "condition_values":
-            # Multiple values -> multi_column_value_distribution with subset filter
-            op = "multi_column_value_distribution"
+        if prev_op == "record_lookup":
+            op = "record_lookup"
+            cond_spec = None
+        elif param_type == "group_by":
+            group_by = [new_val] if isinstance(new_val, str) else new_val
+            op = prev_op
+            prev_cond = prev_spec_dict.get("condition")
+            if isinstance(prev_cond, dict):
+                cond_spec = ConditionSpec(operator=prev_cond.get("operator", "equals"), value=prev_cond.get("value")) if "value" in prev_cond else None
+            elif hasattr(prev_cond, "operator"):
+                cond_spec = ConditionSpec(operator=getattr(prev_cond, "operator", "equals"), value=getattr(prev_cond, "value", None))
+            else:
+                cond_spec = None
+        elif param_type == "condition_values":
+            # Multiple values -> column_value_distribution with subset filter
+            op = "column_value_distribution"
             cond_spec = ConditionSpec(operator="in", value=new_val)
         elif param_type == "condition_value":
-            # Single value -> conditional_count
-            op = "conditional_count"
+            # Single value -> column_value_count
+            op = "column_value_count"
             cond_spec = ConditionSpec(operator="equals", value=new_val)
         else:
-            op = prev_op
+            op = prev_op if prev_op in ("column_value_count", "column_value_distribution", "record_lookup") else "column_value_count"
             prev_cond = prev_spec_dict.get("condition") or {}
             cond_op = "equals"
             if isinstance(prev_cond, dict):
