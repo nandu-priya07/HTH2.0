@@ -193,12 +193,13 @@ def build_dataset_context(
     return "\n".join(lines)
 
 
-def build_user_prompt(question: str, dataset_context: str, conversation_context: Optional[Dict[str, Any]] = None) -> str:
-    """Combines user question and dataset context for the LLM."""
+def build_user_prompt(
+    question: str,
+    dataset_context: str,
+    conversation_context: Optional[Dict[str, Any]] = None,
+    candidates: Optional[Dict[str, Any]] = None
+) -> str:
+    """Combines user question, dataset context, candidate matches, and prior conversation context for the LLM."""
     prior = f"\n### PRIOR CONVERSATION ANALYSIS (use for follow-ups; preserve metric/geography unless user changes them):\n{conversation_context}\n" if conversation_context else ""
-    return f"""{dataset_context}
-{prior}
-
-### USER QUESTION:
-"{question}"
-"""
+    cand_str = f"\n### CANDIDATE MATCHES (RESOLVED SCHEMA & VALUE MATCHES WITH CONFIDENCE SCORES):\n{candidates}\n" if candidates else ""
+    return f"{dataset_context}\n{cand_str}\n{prior}\n\n### USER QUESTION:\n\"{question}\"\n"

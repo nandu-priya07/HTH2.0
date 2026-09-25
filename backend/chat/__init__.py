@@ -1,6 +1,6 @@
 """
 Chat and conversation persistence module.
-Provides domain models, repositories, and services for persistent chat history.
+Provides domain models, repositories, and services for persistent chat history using Supabase PostgreSQL.
 """
 
 from typing import Optional
@@ -15,9 +15,8 @@ from .models import (
     ChatResponse
 )
 from .repository import BaseChatRepository
-from .sqlite_repository import SqliteChatRepository
+from .supabase_repository import SupabaseChatRepository
 from .service import ChatService, generate_deterministic_title
-from .database import initialize_database, get_database_path, get_db_connection
 from .memory_repository import MemoryChatRepository
 from auth import current_guest_id, current_user
 
@@ -30,43 +29,24 @@ _GUEST_TTL_SECONDS = 8 * 60 * 60
 
 def get_chat_service() -> ChatService:
     """
-    Factory / Dependency provider for ChatService.
-    Can be configured via environment or swapped for test mocks.
+    Factory / Dependency provider for ChatService backed by Supabase PostgreSQL.
     """
     global _chat_service_instance
     user = current_user()
     if user:
-        user_id = user["id"]
+        user_id = str(user["id"])
         if user_id not in _user_services:
-            _user_services[user_id] = ChatService(repository=SqliteChatRepository(owner_id=user_id))
+            _user_services[user_id] = ChatService(repository=SupabaseChatRepository(owner_id=user_id))
         return _user_services[user_id]
 
     guest_id = current_guest_id()
     if guest_id:
-        now = monotonic()
-        expired = [key for key, (last_seen, _) in _guest_services.items() if now - last_seen > _GUEST_TTL_SECONDS]
-        for key in expired:
-            _, expired_service = _guest_services.pop(key, (now, None))
-            if expired_service:
-                try:
-                    from storage.dataset_manager import DATASET_REGISTRY
-                    for conversation in expired_service.list_conversations(limit=500):
-                        if conversation.dataset_id:
-                            DATASET_REGISTRY.pop(conversation.dataset_id, None)
-                        for file_meta in expired_service.get_files(conversation.id):
-                            DATASET_REGISTRY.pop(file_meta.get("file_id"), None)
-                except Exception:
-                    pass
-        entry = _guest_services.get(guest_id)
-        if entry:
-            service = entry[1]
-        else:
-            service = ChatService(repository=MemoryChatRepository())
-        _guest_services[guest_id] = (now, service)
-        return service
+        if guest_id not in _user_services:
+            _user_services[guest_id] = ChatService(repository=SupabaseChatRepository(owner_id=guest_id))
+        return _user_services[guest_id]
 
     if _chat_service_instance is None:
-        repository = SqliteChatRepository()
+        repository = SupabaseChatRepository()
         _chat_service_instance = ChatService(repository=repository)
     return _chat_service_instance
 
@@ -80,11 +60,8 @@ __all__ = [
     "MessageResponse",
     "ChatResponse",
     "BaseChatRepository",
-    "SqliteChatRepository",
+    "SupabaseChatRepository",
     "ChatService",
     "generate_deterministic_title",
-    "initialize_database",
-    "get_database_path",
-    "get_db_connection",
     "get_chat_service"
 ]

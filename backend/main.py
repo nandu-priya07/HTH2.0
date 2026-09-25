@@ -6,14 +6,14 @@ from routes.upload import router as upload_router
 from routes.query import router as query_router
 from routes.chat import router as chat_router
 from routes.explorer import router as explorer_router
-from chat.database import initialize_database
+from core.supabase import initialize_supabase_database
 from auth import AuthContextMiddleware, router as auth_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize SQLite database schema on startup
-    initialize_database()
+    # Initialize Supabase PostgreSQL database schema on startup
+    initialize_supabase_database()
     yield
 
 
@@ -49,4 +49,3 @@ def read_root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
-

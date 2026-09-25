@@ -1,4 +1,5 @@
 import pandas as pd
+from analyst.models import normalize_operator
 from .entity_discovery import discover_geo_profile
 from .hierarchy_discovery import discover_hierarchy
 from .metric_synthesis import resolve_metric, materialize_metric
@@ -34,7 +35,7 @@ def run_geo_analysis(df, spec):
         and str(item.get("value","")).casefold()==str(parent.get("value","")).casefold()
         for item in analysis_filters
     ):
-        analysis_filters.append({"column":parent["column"],"operator":"=","value":parent.get("value")})
+        analysis_filters.append({"column":parent["column"],"operator":"eq","value":parent.get("value")})
     for f in analysis_filters:
         col=next((c for c in working.columns if c.lower()==str(f.get("column","")).lower()),None)
         if f.get("operator") == "continent":
@@ -45,11 +46,13 @@ def run_geo_analysis(df, spec):
             working = working[keep]
             continue
         if not col: return {"success":False,"error":f"Filter field '{f.get('column')}' was not found in the dataset."}
-        val=f.get("value"); op=f.get("operator","=")
-        if op not in ("=","==","!=","in"): return {"success":False,"error":f"Unsupported geographic filter operator '{op}'."}
-        if op in ("=","=="): working=working[working[col].astype(str).str.casefold()==str(val).casefold()]
-        elif op=="!=": working=working[working[col].astype(str).str.casefold()!=str(val).casefold()]
-        elif op=="in" and isinstance(val,list): working=working[working[col].astype(str).str.casefold().isin([str(v).casefold() for v in val])]
+        val=f.get("value"); raw_op=f.get("operator","eq"); op=normalize_operator(raw_op)
+        if op not in ("eq","neq","in","not_in","contains","between","gt","gte","lt","lte","continent"):
+            return {"success":False,"error":f"Unsupported geographic filter operator '{raw_op}'."}
+        if op == "eq": working=working[working[col].astype(str).str.casefold()==str(val).casefold()]
+        elif op == "neq": working=working[working[col].astype(str).str.casefold()!=str(val).casefold()]
+        elif op == "in" and isinstance(val,(list,tuple,set)): working=working[working[col].astype(str).str.casefold().isin([str(v).casefold() for v in val])]
+        elif op == "contains": working=working[working[col].astype(str).str.casefold().str.contains(str(val).casefold(),na=False)]
     spec={**spec,"filters":analysis_filters}
     working, metric_col=materialize_metric(working, metric)
     agg=metric_spec.get("aggregation","sum").lower()

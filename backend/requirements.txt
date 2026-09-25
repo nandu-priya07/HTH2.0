@@ -7,3 +7,8 @@ xlrd
 httpx
 sentence-transformers
 duckdb
+supabase
+psycopg2-binary
+sqlalchemy
+python-dotenv
+rapidfuzz

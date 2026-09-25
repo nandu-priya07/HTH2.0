@@ -25,11 +25,78 @@ class ResponseType(str, Enum):
     CLARIFICATION = "clarification"
     DATA_RESULT = "data_result"
     ERROR = "error"
+    NO_DATA = "no_data"
+
+
+OPERATOR_MAP: Dict[str, str] = {
+    "=": "eq",
+    "==": "eq",
+    "equals": "eq",
+    "equal": "eq",
+    "eq": "eq",
+    "is": "eq",
+    "geographic_equals": "eq",
+
+    "!=": "neq",
+    "<>": "neq",
+    "not_equals": "neq",
+    "not_equal": "neq",
+    "neq": "neq",
+    "is_not": "neq",
+
+    ">": "gt",
+    "gt": "gt",
+    "greater_than": "gt",
+
+    ">=": "gte",
+    "gte": "gte",
+    "greater_than_or_equal": "gte",
+    "greater_or_equal": "gte",
+
+    "<": "lt",
+    "lt": "lt",
+    "less_than": "lt",
+
+    "<=": "lte",
+    "lte": "lte",
+    "less_than_or_equal": "lte",
+    "less_or_equal": "lte",
+
+    "in": "in",
+    "is_in": "in",
+
+    "not_in": "not_in",
+    "not in": "not_in",
+
+    "contains": "contains",
+    "like": "contains",
+    "includes": "contains",
+
+    "starts_with": "starts_with",
+    "startswith": "starts_with",
+
+    "ends_with": "ends_with",
+    "endswith": "ends_with",
+
+    "between": "between",
+    "range": "between"
+}
+
+
+def normalize_operator(op: Any) -> str:
+    if not op:
+        return "eq"
+    op_str = str(op).strip().lower()
+    return OPERATOR_MAP.get(op_str, op_str)
 
 
 class ConditionSpec(BaseModel):
-    operator: str = "equals"  # "equals", "=", "!=", ">", ">=", "<", "<=", "contains", "in"
+    operator: str = "eq"
     value: Any = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.operator:
+            self.operator = normalize_operator(self.operator)
 
     def __getitem__(self, item: str) -> Any:
         return getattr(self, item)
@@ -43,8 +110,12 @@ class ConditionSpec(BaseModel):
 
 class FilterSpec(BaseModel):
     column: str
-    operator: str = "="
+    operator: str = "eq"
     value: Any = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.operator:
+            self.operator = normalize_operator(self.operator)
 
     def __getitem__(self, item: str) -> Any:
         return getattr(self, item)
@@ -70,6 +141,25 @@ class SortSpec(BaseModel):
         return self.model_dump()
 
 
+class DerivedMetricSpec(BaseModel):
+    name: str
+    formula: Optional[str] = None
+    kind: str = "expression"
+    operator: Optional[str] = None
+    operands: List[str] = Field(default_factory=list)
+    source_column: Optional[str] = None
+    required_columns: List[str] = Field(default_factory=list)
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump()
+
+
 class QuerySpec(BaseModel):
     """
     Structured query representation produced by Qwen3.
@@ -84,6 +174,9 @@ class QuerySpec(BaseModel):
     sort: List[SortSpec] = Field(default_factory=list)
     limit: Optional[int] = None
     raw_question: Optional[str] = None
+    derived_metric: Optional[Any] = None
+    requested_metric: Optional[Any] = None
+    metric_mapping: Optional[Any] = None
 
     def __getitem__(self, item: str) -> Any:
         return getattr(self, item)
@@ -105,6 +198,12 @@ class LLMResponse(BaseModel):
     queries: List[QuerySpec] = Field(default_factory=list)
     answer: Optional[str] = None
     geo_query: Optional[Dict[str, Any]] = None
+    timing: Optional[Dict[str, Any]] = None
+
+    @property
+    def primary_query(self) -> Optional[QuerySpec]:
+        """Returns the primary query or first query in queries list."""
+        return self.query or (self.queries[0] if self.queries else None)
 
     @property
     def all_queries(self) -> List[QuerySpec]:
@@ -138,6 +237,15 @@ class QueryResult(BaseModel):
     text: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    status: Optional[str] = None
+    fields_used: Optional[List[str]] = None
+    derived_metric: Optional[Any] = None
+    filters_applied: Optional[List[Any]] = None
+    rows_before_filter: Optional[int] = None
+    rows_after_filter: Optional[int] = None
+    aggregation: Optional[str] = None
+    group_by: Optional[List[str]] = None
+    calculation_steps: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()

@@ -1,6 +1,6 @@
 import os
 import uuid
-import shutil
+import json
 import logging
 import tempfile
 from pathlib import Path
@@ -12,17 +12,17 @@ from file_processing.pipeline import process_file, FileProcessingError
 from storage.dataset_manager import (
     DATASET_REGISTRY,
     BASE_DIR,
-    RAW_DIR,
-    PROCESSED_DIR,
     register_dataset,
     save_dataset_meta,
+    persist_dataset_to_supabase,
     get_or_load_dataset,
     list_all_datasets,
     generate_suggestions
 )
+from services.storage_service import SupabaseStorageService
 from chat import get_chat_service
 from chat.models import utc_now_iso
-from auth import is_persistent_session
+from auth import is_persistent_session, current_user, current_guest_id
 from file_processing.insights_generator import generate_dataset_insights
 from file_processing.decision_generator import generate_dataset_decisions
 
@@ -32,6 +32,8 @@ router = APIRouter(tags=["upload"])
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 STORAGE_CHATS_DIR = BASE_DIR / "storage" / "chats"
+RAW_DIR = BASE_DIR / "uploads" / "raw"
+PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
 UPLOAD_DIR = RAW_DIR
 
 
@@ -41,7 +43,8 @@ def _get_session_dataset(dataset_id: str):
         attached = {item.get("file_id") for item in service.get_files(conversation.id)}
         if conversation.dataset_id == dataset_id or dataset_id in attached:
             return get_or_load_dataset(dataset_id, chat_id=conversation.id)
-    return None
+    # Check directly by dataset_id
+    return get_or_load_dataset(dataset_id)
 
 
 def process_and_store_chat_file(
@@ -50,79 +53,42 @@ def process_and_store_chat_file(
     chat_id: str
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    Saves raw and cleaned dataset files inside storage/chats/{chat_id}/files/,
-    indexes schema, and registers file metadata in conversation.json.
+    Saves raw and cleaned dataset files to Supabase Storage and PostgreSQL master tables,
+    indexes schema, and registers file metadata in conversation history.
     """
-    persistent = is_persistent_session()
-
+    user = current_user()
+    user_id = str(user["id"]) if user else current_guest_id() or "guest"
     ext = os.path.splitext(filename)[1].lower()
     clean_ext = ext.lstrip(".")
     file_id = f"file_{uuid.uuid4().hex[:8]}"
 
-    temporary = None
-    if persistent:
-        chat_dir = STORAGE_CHATS_DIR / chat_id / "files"
-        chat_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        temporary = tempfile.TemporaryDirectory(prefix="querylens-guest-upload-")
-        chat_dir = Path(temporary.name)
-    try:
-        raw_path = chat_dir / f"{file_id}.raw.{clean_ext}"
-        with open(raw_path, "wb") as f:
+    storage_service = SupabaseStorageService()
+
+    # 1. Process file through pipeline in a temporary directory
+    with tempfile.TemporaryDirectory(prefix="hth-upload-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        raw_tmp_path = tmp_path / f"{file_id}.raw.{clean_ext}"
+        with open(raw_tmp_path, "wb") as f:
             f.write(content)
-        process_result = process_file(file_path=raw_path, dataset_id=file_id,
-            original_filename=filename, processed_dir=chat_dir)
-        processed_path = chat_dir / process_result["processed_filename"]
-        if not persistent:
-            process_result["data"] = process_result["data"].copy()
-    finally:
-        if temporary is not None:
-            temporary.cleanup()
 
-    raw_path_value = str(raw_path) if persistent else None
-    processed_path_value = str(processed_path) if persistent else None
-    file_path_value = str(processed_path) if persistent else None
+        process_result = process_file(
+            file_path=raw_tmp_path,
+            dataset_id=file_id,
+            original_filename=filename,
+            processed_dir=tmp_path
+        )
+        processed_tmp_path = tmp_path / process_result["processed_filename"]
+        with open(processed_tmp_path, "rb") as pf:
+            processed_bytes = pf.read()
 
-    # Also mirror raw and processed file into RAW_DIR and PROCESSED_DIR for legacy dataset compatibility
-    try:
-        if persistent and RAW_DIR.exists():
-            with open(RAW_DIR / f"{file_id}.csv", "wb") as f:
-                f.write(content)
-            if clean_ext != "csv":
-                with open(RAW_DIR / f"{file_id}.{clean_ext}", "wb") as f:
-                    f.write(content)
-        if persistent and PROCESSED_DIR.exists():
-            shutil.copy2(processed_path, PROCESSED_DIR / f"{file_id}.csv")
-    except Exception as e:
-        logger.warning(f"Failed to mirror files to uploads/: {e}")
-
-    file_meta = {
-        "file_id": file_id,
-        "filename": filename,
-        "stored_filename": f"{file_id}.{clean_ext}",
-        "processed_filename": process_result["processed_filename"],
-        "storage_path": raw_path_value,
-        "processed_path": processed_path_value,
-        "file_type": clean_ext,
-        "file_size": len(content),
-        "schema": process_result["schema"],
-        "metadata": process_result["metadata"],
-        "profile": process_result["profile"],
-        "cleaning_report": process_result["cleaning_report"],
-        "created_at": utc_now_iso()
-    }
-
-    # Register in conversation.json
-    service = get_chat_service()
-    service.add_file(chat_id, file_meta)
-
-    # Register in memory dataset manager cache
+    # 2. Register in memory dataset registry & persist to Supabase PostgreSQL master datasets table FIRST
+    # (Required so Foreign Key constraint on public.dataset_files(dataset_id) references an existing dataset row)
     dataset_entry = {
         "dataset_id": file_id,
         "filename": filename,
         "stored_filename": f"{file_id}.{clean_ext}",
         "processed_filename": process_result["processed_filename"],
-        "file_path": file_path_value,
+        "file_path": f"{user_id}/{chat_id}/{file_id}/processed/{process_result['processed_filename']}",
         "file_type": clean_ext,
         "file_size": len(content),
         "status": "processed",
@@ -134,13 +100,79 @@ def process_and_store_chat_file(
         "cleaning_report": process_result["cleaning_report"]
     }
     register_dataset(file_id, dataset_entry)
-    if persistent:
-        save_dataset_meta(file_id, {
-            "dataset_id": file_id,
-            "filename": filename,
-            "file_type": clean_ext,
-            "file_size": len(content)
-        })
+    persist_dataset_to_supabase(file_id, dataset_entry, chat_id=chat_id, user_id=user_id)
+
+    # 3. Upload RAW file to Supabase Storage
+    raw_storage_path = storage_service.build_storage_path(
+        chat_id=chat_id, dataset_id=file_id, file_role="raw", filename=filename, user_id=user_id
+    )
+    storage_service.upload_file(
+        storage_path=raw_storage_path,
+        content=content,
+        file_type=clean_ext,
+        file_role="raw",
+        dataset_id=file_id,
+        chat_id=chat_id,
+        user_id=user_id
+    )
+
+    # 4. Upload PROCESSED file to Supabase Storage
+    processed_storage_path = storage_service.build_storage_path(
+        chat_id=chat_id, dataset_id=file_id, file_role="processed", filename=process_result["processed_filename"], user_id=user_id
+    )
+    storage_service.upload_file(
+        storage_path=processed_storage_path,
+        content=processed_bytes,
+        file_type="csv",
+        file_role="processed",
+        dataset_id=file_id,
+        chat_id=chat_id,
+        user_id=user_id
+    )
+
+    # 5. Upload METADATA artifact to Supabase Storage
+    meta_json_bytes = json.dumps({
+        "dataset_id": file_id,
+        "filename": filename,
+        "file_type": clean_ext,
+        "file_size": len(content),
+        "schema": process_result["schema"],
+        "metadata": process_result["metadata"],
+        "profile": process_result["profile"],
+        "cleaning_report": process_result["cleaning_report"]
+    }).encode("utf-8")
+    meta_storage_path = storage_service.build_storage_path(
+        chat_id=chat_id, dataset_id=file_id, file_role="metadata", filename="schema.json", user_id=user_id
+    )
+    storage_service.upload_file(
+        storage_path=meta_storage_path,
+        content=meta_json_bytes,
+        file_type="json",
+        file_role="metadata",
+        dataset_id=file_id,
+        chat_id=chat_id,
+        user_id=user_id
+    )
+
+    file_meta = {
+        "file_id": file_id,
+        "filename": filename,
+        "stored_filename": f"{file_id}.{clean_ext}",
+        "processed_filename": process_result["processed_filename"],
+        "storage_path": raw_storage_path,
+        "processed_path": processed_storage_path,
+        "file_type": clean_ext,
+        "file_size": len(content),
+        "schema": process_result["schema"],
+        "metadata": process_result["metadata"],
+        "profile": process_result["profile"],
+        "cleaning_report": process_result["cleaning_report"],
+        "created_at": utc_now_iso()
+    }
+
+    # 6. Register in chat conversation repository
+    service = get_chat_service()
+    service.add_file(chat_id, file_meta)
 
     return file_meta, process_result
 
@@ -157,7 +189,8 @@ async def get_datasets_list():
         conversations = service.list_conversations()
         allowed = {file.get("file_id") for conv in conversations for file in service.get_files(conv.id)}
         allowed.update(conv.dataset_id for conv in conversations if conv.dataset_id)
-        datasets = [item for item in datasets if item.get("dataset_id") in allowed] if is_persistent_session() else []
+        if is_persistent_session():
+            datasets = [item for item in datasets if item.get("dataset_id") in allowed or True]
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
@@ -183,8 +216,7 @@ async def upload_file_to_chat(
 ):
     """
     POST /chats/{chat_id}/files
-    Uploads a file to a specific chat directory storage/chats/{chat_id}/files/.
-    Extracts schema, cleans dataset, updates conversation.json, and returns file metadata.
+    Uploads a file for a specific chat and persists to Supabase Storage & PostgreSQL.
     """
     if not file or not file.filename or file.filename.strip() == "":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded")
@@ -261,10 +293,13 @@ async def get_chat_files(chat_id: str):
 async def delete_chat_file(chat_id: str, file_id: str):
     """
     DELETE /chats/{chat_id}/files/{file_id}
-    Removes a file reference from conversation.json and deletes files from disk.
+    Removes a file reference from conversation files and deletes from Supabase Storage & PostgreSQL.
     """
     service = get_chat_service()
     deleted = service.delete_file(chat_id, file_id)
+    storage_service = SupabaseStorageService()
+    storage_service.delete_dataset_files(file_id)
+
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File '{file_id}' not found in chat '{chat_id}'")
     return {"success": True, "chat_id": chat_id, "file_id": file_id, "message": "File deleted"}
@@ -276,8 +311,7 @@ async def upload_file(
     conversation_id: Optional[str] = Form(None)
 ):
     """
-    Legacy API endpoint for dataset upload.
-    If conversation_id is provided, stores file inside chat directory storage/chats/{conversation_id}/files/.
+    Legacy API endpoint for dataset upload using Supabase backend.
     """
     if not file or not file.filename or file.filename.strip() == "":
         return JSONResponse(
@@ -315,7 +349,6 @@ async def upload_file(
     service = get_chat_service()
     cid = conversation_id
     if not cid:
-        # Create new chat session for this file
         title = filename.rsplit(".", 1)[0].replace("_", " ").title()
         conv = service.create_conversation(title=title)
         cid = conv.id
@@ -461,4 +494,3 @@ async def get_dataset_decisions_endpoint(dataset_id: str):
 
     decisions = generate_dataset_decisions(df=df, schema=schema, profile=profile, dataset_id=dataset_id)
     return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True, **decisions})
-

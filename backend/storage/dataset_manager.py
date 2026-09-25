@@ -1,16 +1,26 @@
 """
-Dataset Manager & Registry Service.
-Handles in-memory caching, disk loading, dataset listing,
-and dynamic analytical question suggestion generation.
+Dataset Manager & Registry Service backed by Supabase PostgreSQL and Supabase Storage.
+Handles dataset registration, in-memory caching, Supabase loading/saving, and dataset suggestions.
 """
 
-import os
+import io
 import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import pandas as pd
+from psycopg2.extras import RealDictCursor, Json
 
+from core.supabase import get_supabase_connection
+from services.storage_service import SupabaseStorageService
+from services.dataset_runtime import (
+    DatasetRuntimeManager,
+    get_dataset_runtime,
+    load_dataset_runtime,
+    release_dataset_runtime,
+    invalidate_dataset_runtime,
+    is_dataset_loaded
+)
 from file_processing.schema_inference import infer_schema
 from file_processing.data_profiler import profile_dataset
 
@@ -19,58 +29,161 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 RAW_DIR = BASE_DIR / "uploads" / "raw"
 PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
+CHATS_DIR = BASE_DIR / "storage" / "chats"
 
-# In-memory registry of datasets
+# In-memory registry of active datasets
 DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 
 def register_dataset(dataset_id: str, info: Dict[str, Any]) -> None:
-    """Stores or updates dataset information in the in-memory registry."""
+    """Stores or updates dataset information in the in-memory registry and runtime manager."""
     DATASET_REGISTRY[dataset_id] = info
+    df = info.get("data")
+    if df is not None:
+        load_dataset_runtime(dataset_id, existing_df=df, existing_info=info)
 
 
-def save_dataset_meta(dataset_id: str, meta: Dict[str, Any]) -> None:
-    """Saves lightweight dataset metadata sidecar for exact persistence across restarts."""
+def _parse_json(val: Any) -> Any:
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        return val
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return None
+    return val
+
+
+def save_dataset_meta(dataset_id: str, meta: Dict[str, Any], chat_id: Optional[str] = None, user_id: Optional[str] = None) -> None:
+    """
+    Persists dataset metadata sidecar directly into Supabase PostgreSQL.
+    """
     try:
-        if not PROCESSED_DIR.exists():
-            PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-        meta_file = PROCESSED_DIR / f"{dataset_id}.meta.json"
-        with open(meta_file, "w", encoding="utf-8") as f:
-            json.dump(meta, f)
+        with get_supabase_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE public.datasets
+                    SET metadata_json = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s;
+                    """,
+                    (Json(meta), dataset_id)
+                )
     except Exception as e:
-        logger.warning(f"Failed to write meta.json for {dataset_id}: {e}")
+        logger.warning(f"Failed to update dataset metadata in Supabase for {dataset_id}: {e}")
 
 
-CHATS_DIR = BASE_DIR / "storage" / "chats"
+def persist_dataset_to_supabase(
+    dataset_id: str,
+    info: Dict[str, Any],
+    chat_id: Optional[str] = None,
+    user_id: Optional[str] = None
+) -> None:
+    """
+    Persists master dataset metadata record into Supabase PostgreSQL.
+    """
+    filename = info.get("filename") or f"{dataset_id}.csv"
+    stored_filename = info.get("stored_filename") or f"{dataset_id}.csv"
+    processed_filename = info.get("processed_filename") or f"{dataset_id}.csv"
+    file_type = info.get("file_type", "csv")
+    file_size = info.get("file_size", 0)
+    status_str = info.get("status", "processed")
+
+    metadata = info.get("metadata") or info.get("result", {}).get("metadata") or {}
+    schema = info.get("schema") or info.get("result", {}).get("schema") or {}
+    profile = info.get("profile") or info.get("result", {}).get("profile") or {}
+    cleaning_report = info.get("cleaning_report") or info.get("result", {}).get("cleaning_report") or {}
+
+    row_count = metadata.get("row_count") or metadata.get("rows") or 0
+    col_count = metadata.get("column_count") or metadata.get("columns") or 0
+
+    with get_supabase_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.datasets (
+                    id, user_id, chat_id, filename, stored_filename, processed_filename,
+                    file_type, file_size, row_count, column_count, status,
+                    schema_json, profile_json, cleaning_report_json, metadata_json,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO UPDATE SET
+                    chat_id = COALESCE(EXCLUDED.chat_id, public.datasets.chat_id),
+                    user_id = COALESCE(EXCLUDED.user_id, public.datasets.user_id),
+                    filename = EXCLUDED.filename,
+                    stored_filename = EXCLUDED.stored_filename,
+                    processed_filename = EXCLUDED.processed_filename,
+                    file_type = EXCLUDED.file_type,
+                    file_size = EXCLUDED.file_size,
+                    row_count = EXCLUDED.row_count,
+                    column_count = EXCLUDED.column_count,
+                    status = EXCLUDED.status,
+                    schema_json = EXCLUDED.schema_json,
+                    profile_json = EXCLUDED.profile_json,
+                    cleaning_report_json = EXCLUDED.cleaning_report_json,
+                    metadata_json = EXCLUDED.metadata_json,
+                    updated_at = CURRENT_TIMESTAMP;
+                """,
+                (
+                    dataset_id,
+                    user_id,
+                    chat_id,
+                    filename,
+                    stored_filename,
+                    processed_filename,
+                    file_type,
+                    file_size,
+                    row_count,
+                    col_count,
+                    status_str,
+                    Json(schema),
+                    Json(profile),
+                    Json(cleaning_report),
+                    Json(metadata)
+                )
+            )
+    logger.info(f"Persisted dataset master metadata into Supabase for dataset '{dataset_id}'")
 
 
 def get_or_load_dataset(dataset_id: Optional[str] = None, chat_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
-    Retrieves dataset from in-memory registry, chat storage files, or processed directory on disk.
-    Returns None if dataset_id is None, empty, or not found.
-    Never guesses or falls back to a global dataset across chats when dataset_id is None.
+    Retrieves dataset runtime from DatasetRuntimeManager or loads processed file from Supabase Storage.
     """
     if not dataset_id or not str(dataset_id).strip():
         return None
 
     clean_id = str(dataset_id).strip()
 
-    # 1. Check in-memory registry for specific dataset_id
-    if clean_id in DATASET_REGISTRY:
-        return DATASET_REGISTRY[clean_id]
+    # 1. Check DatasetRuntimeManager cache
+    runtime = get_dataset_runtime(clean_id)
+    if runtime is not None:
+        DATASET_REGISTRY[clean_id] = runtime.to_dict()
+        return runtime.to_dict()
 
-    # 2. Check chat-scoped storage files
+    # 2. Check legacy DATASET_REGISTRY if loaded with DataFrame
+    if clean_id in DATASET_REGISTRY and DATASET_REGISTRY[clean_id].get("data") is not None:
+        info = DATASET_REGISTRY[clean_id]
+        rt = load_dataset_runtime(clean_id, chat_id=chat_id, existing_df=info.get("data"), existing_info=info)
+        if rt:
+            return rt.to_dict()
+
+    # 3. Load via DatasetRuntimeManager from Supabase Storage
+    rt = load_dataset_runtime(clean_id, chat_id=chat_id)
+    if rt:
+        DATASET_REGISTRY[clean_id] = rt.to_dict()
+        return rt.to_dict()
+
+    # 4. Legacy fallback to local disk files if present during migration
     target_csv = None
-    original_filename = f"{clean_id}.csv"
-    file_type = "csv"
-
     if chat_id:
         chat_csv = CHATS_DIR / str(chat_id) / "files" / f"{clean_id}.csv"
         if chat_csv.exists():
             target_csv = chat_csv
 
     if not target_csv and CHATS_DIR.exists():
-        # Search all chat folders for this file_id
         matches = list(CHATS_DIR.glob(f"*/files/{clean_id}.csv"))
         if matches:
             target_csv = matches[0]
@@ -85,49 +198,17 @@ def get_or_load_dataset(dataset_id: Optional[str] = None, chat_id: Optional[str]
             df = pd.read_csv(target_csv)
             schema = infer_schema(df)
             profile = profile_dataset(df, schema)
-            file_size = target_csv.stat().st_size
-
-            # Look for conversation.json or sidecar meta to recover original filename
-            chat_folder = target_csv.parent.parent
-            conv_json_path = chat_folder / "conversation.json"
-            if conv_json_path.exists():
-                try:
-                    with open(conv_json_path, "r", encoding="utf-8") as cf:
-                        cdata = json.load(cf)
-                        for f_item in cdata.get("files", []):
-                            if f_item.get("file_id") == clean_id:
-                                original_filename = f_item.get("filename") or original_filename
-                                file_type = f_item.get("file_type") or file_type
-                                file_size = f_item.get("file_size") or file_size
-                                break
-                except Exception:
-                    pass
-            else:
-                meta_json_path = PROCESSED_DIR / f"{clean_id}.meta.json"
-                if meta_json_path.exists():
-                    try:
-                        with open(meta_json_path, "r", encoding="utf-8") as mf:
-                            meta_data = json.load(mf)
-                            original_filename = meta_data.get("filename") or meta_data.get("original_filename") or original_filename
-                            file_type = meta_data.get("file_type") or file_type
-                            file_size = meta_data.get("file_size") or file_size
-                    except Exception:
-                        pass
-
             ds_entry = {
                 "dataset_id": clean_id,
-                "filename": original_filename,
-                "stored_filename": f"{clean_id}.{file_type}",
+                "filename": f"{clean_id}.csv",
+                "stored_filename": f"{clean_id}.csv",
                 "processed_filename": f"{clean_id}.csv",
-                "file_path": str(target_csv),
-                "file_type": file_type,
-                "file_size": file_size,
+                "file_type": "csv",
+                "file_size": target_csv.stat().st_size,
                 "status": "processed",
                 "data": df,
                 "metadata": {
                     "dataset_id": clean_id,
-                    "original_filename": original_filename,
-                    "processed_filename": f"{clean_id}.csv",
                     "row_count": len(df),
                     "column_count": len(df.columns),
                     "rows": len(df),
@@ -135,84 +216,100 @@ def get_or_load_dataset(dataset_id: Optional[str] = None, chat_id: Optional[str]
                 },
                 "schema": schema,
                 "profile": profile,
-                "cleaning_report": {
-                    "clean_dataset": True,
-                    "rows_removed": 0
-                },
+                "cleaning_report": {"clean_dataset": True, "rows_removed": 0},
                 "result": {
                     "dataset_id": clean_id,
-                    "original_filename": original_filename,
-                    "processed_filename": f"{clean_id}.csv",
                     "schema": schema,
                     "profile": profile,
-                    "metadata": {
-                        "rows": len(df),
-                        "columns": len(df.columns)
-                    }
+                    "metadata": {"rows": len(df), "columns": len(df.columns)}
                 }
             }
+            rt = load_dataset_runtime(clean_id, chat_id=chat_id, existing_df=df, existing_info=ds_entry)
             DATASET_REGISTRY[clean_id] = ds_entry
             return ds_entry
         except Exception as e:
-            logger.error(f"Failed to auto-load processed dataset {clean_id} from disk: {e}")
-            return None
+            logger.error(f"Failed legacy disk load for dataset {clean_id}: {e}")
 
     return None
 
 
 def list_all_datasets() -> List[Dict[str, Any]]:
     """
-    Lists all available datasets from memory and processed disk storage.
-    Returns list of serialized dataset dictionaries suitable for frontend consumption.
+    Lists all active/processed datasets from Supabase PostgreSQL and memory.
     """
-    # 1. Discover all processed datasets on disk
-    if PROCESSED_DIR.exists():
-        csv_files = sorted(
-            list(PROCESSED_DIR.glob("*.csv")),
-            key=lambda p: (p.stat().st_mtime, p.stat().st_size),
-            reverse=True
-        )
-        for csv_file in csv_files:
-            ds_id = csv_file.stem
-            if ds_id not in DATASET_REGISTRY:
-                get_or_load_dataset(ds_id)
+    datasets_map: Dict[str, Dict[str, Any]] = {}
 
-    # 2. Build serialized dataset summaries
-    datasets: List[Dict[str, Any]] = []
-    # Reverse to show newest first
-    for ds_id, info in reversed(list(DATASET_REGISTRY.items())):
-        metadata = info.get("metadata") or info.get("result", {}).get("metadata") or {}
-        df = info.get("data")
-        row_count = metadata.get("row_count") or metadata.get("rows") or (len(df) if df is not None else 0)
-        col_count = metadata.get("column_count") or metadata.get("columns") or (len(df.columns) if df is not None else 0)
+    try:
+        with get_supabase_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM public.datasets ORDER BY updated_at DESC;")
+                rows = cur.fetchall()
 
-        schema = info.get("schema") or info.get("result", {}).get("schema")
-        profile = info.get("profile") or info.get("result", {}).get("profile")
-        cleaning_report = info.get("cleaning_report") or info.get("result", {}).get("cleaning_report")
+                for row in rows:
+                    ds_id = row["id"]
+                    metadata = _parse_json(row["metadata_json"]) or {}
+                    schema = _parse_json(row["schema_json"])
+                    profile = _parse_json(row["profile_json"])
+                    cleaning_report = _parse_json(row["cleaning_report_json"])
 
-        datasets.append({
-            "dataset_id": ds_id,
-            "filename": info.get("filename") or f"{ds_id}.csv",
-            "stored_filename": info.get("stored_filename") or f"{ds_id}.csv",
-            "processed_filename": info.get("processed_filename") or f"{ds_id}.csv",
-            "file_type": info.get("file_type", "csv"),
-            "file_size": info.get("file_size", 0),
-            "status": info.get("status", "processed"),
-            "metadata": {
-                **metadata,
+                    row_count = row["row_count"] or metadata.get("row_count") or metadata.get("rows") or 0
+                    col_count = row["column_count"] or metadata.get("column_count") or metadata.get("columns") or 0
+
+                    datasets_map[ds_id] = {
+                        "dataset_id": ds_id,
+                        "filename": row["filename"],
+                        "stored_filename": row["stored_filename"],
+                        "processed_filename": row["processed_filename"],
+                        "file_type": row["file_type"],
+                        "file_size": row["file_size"],
+                        "status": row["status"],
+                        "metadata": {
+                            **metadata,
+                            "rows": row_count,
+                            "columns": col_count,
+                            "row_count": row_count,
+                            "column_count": col_count
+                        },
+                        "rows": row_count,
+                        "columns": col_count,
+                        "schema": schema,
+                        "profile": profile,
+                        "cleaning_report": cleaning_report
+                    }
+    except Exception as e:
+        logger.error(f"Error listing datasets from Supabase PostgreSQL: {e}")
+
+    # Include any remaining in-memory datasets
+    for ds_id, info in DATASET_REGISTRY.items():
+        if ds_id not in datasets_map:
+            metadata = info.get("metadata") or info.get("result", {}).get("metadata") or {}
+            df = info.get("data")
+            row_count = metadata.get("row_count") or metadata.get("rows") or (len(df) if df is not None else 0)
+            col_count = metadata.get("column_count") or metadata.get("columns") or (len(df.columns) if df is not None else 0)
+
+            datasets_map[ds_id] = {
+                "dataset_id": ds_id,
+                "filename": info.get("filename") or f"{ds_id}.csv",
+                "stored_filename": info.get("stored_filename") or f"{ds_id}.csv",
+                "processed_filename": info.get("processed_filename") or f"{ds_id}.csv",
+                "file_type": info.get("file_type", "csv"),
+                "file_size": info.get("file_size", 0),
+                "status": info.get("status", "processed"),
+                "metadata": {
+                    **metadata,
+                    "rows": row_count,
+                    "columns": col_count,
+                    "row_count": row_count,
+                    "column_count": col_count
+                },
                 "rows": row_count,
                 "columns": col_count,
-                "row_count": row_count,
-                "column_count": col_count
-            },
-            "rows": row_count,
-            "columns": col_count,
-            "schema": schema,
-            "profile": profile,
-            "cleaning_report": cleaning_report
-        })
+                "schema": info.get("schema") or info.get("result", {}).get("schema"),
+                "profile": info.get("profile") or info.get("result", {}).get("profile"),
+                "cleaning_report": info.get("cleaning_report") or info.get("result", {}).get("cleaning_report")
+            }
 
-    return datasets
+    return list(datasets_map.values())
 
 
 def generate_suggestions(schema: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]] = None) -> List[str]:
@@ -235,7 +332,6 @@ def generate_suggestions(schema: Optional[Dict[str, Any]], profile: Optional[Dic
     date_cols = schema.get("date_columns", [])
     id_cols = set(schema.get("identifier_columns", []))
 
-    # Priority scoring for metrics
     metric_priority = [
         "sales", "revenue", "profit", "amount", "price", "cost", "income",
         "salary", "quantity", "total", "score", "discount", "margin", "units",
@@ -258,7 +354,6 @@ def generate_suggestions(schema: Optional[Dict[str, Any]], profile: Optional[Dic
     if not valid_metrics and num_cols:
         valid_metrics = [m for m in num_cols if m not in id_cols] or num_cols
 
-    # Priority scoring for dimensions / categories
     dim_priority = [
         "category", "sub_category", "subcategory", "region", "country", "country_region",
         "state", "city", "segment", "department", "brand", "product", "product_name",

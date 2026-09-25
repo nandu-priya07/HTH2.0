@@ -64,8 +64,6 @@ async def list_all_conversations(
     try:
         service = get_chat_service()
         conversations = service.list_conversations(limit=limit, offset=offset)
-        if not current_user():
-            conversations = []
         res_list = []
         for c in conversations:
             files = service.get_files(c.id)

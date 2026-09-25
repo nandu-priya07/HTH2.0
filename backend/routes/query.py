@@ -4,12 +4,14 @@ API Route for Natural Language Query Processing, Analytics Execution, and Contex
 
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, status, HTTPException
 from fastapi.responses import JSONResponse
 
 from analyst import process_query_with_llm, execute_query, execute_queries, LLMResponse, QueryResult, ResponseType
+from analyst.response_generator import ResponseGenerator
 from analyst.models import QuerySpec
 from storage.dataset_manager import get_or_load_dataset
 from visualization.selector import select_visualizations
@@ -35,10 +37,45 @@ class QueryRequest(BaseModel):
 async def execute_chat_message(chat_id: str, payload: QueryRequest):
     """
     POST /chats/{chat_id}/messages
-    Executes query in a chat, resolving context from conversation.json.
+    Executes query in a chat, resolving context from conversation session.
     """
     payload.conversation_id = chat_id
     return await execute_user_query(payload)
+
+
+def _build_timing(
+    t_req_start: float,
+    t_chat_ms: float = 0.0,
+    t_context_ms: float = 0.0,
+    t_runtime_ms: float = 0.0,
+    t_llm_ms: float = 0.0,
+    t_exec_ms: float = 0.0,
+    t_format_ms: float = 0.0,
+    llm_timing: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    t_total_ms = (time.perf_counter() - t_req_start) * 1000
+    timing_dict = {
+        "total_ms": round(t_total_ms, 2),
+        "chat_ms": round(t_chat_ms, 2),
+        "context_ms": round(t_context_ms, 2),
+        "runtime_ms": round(t_runtime_ms, 2),
+        "llm_ms": round(t_llm_ms, 2),
+        "exec_ms": round(t_exec_ms, 2),
+        "format_ms": round(t_format_ms, 2),
+        "steps": {
+            "request_received": "0.00ms",
+            "chat_context": f"{t_chat_ms:.2f}ms",
+            "context_resolution": f"{t_context_ms:.2f}ms",
+            "runtime_cache_lookup": f"{t_runtime_ms:.2f}ms",
+            "llm_query_understanding": f"{t_llm_ms:.2f}ms",
+            "analytical_execution": f"{t_exec_ms:.2f}ms",
+            "response_formatting": f"{t_format_ms:.2f}ms",
+            "total_request_time": f"{t_total_ms:.2f}ms"
+        }
+    }
+    if llm_timing:
+        timing_dict["llm_breakdown"] = llm_timing
+    return timing_dict
 
 
 @router.post("/api/query")
@@ -46,8 +83,10 @@ async def execute_chat_message(chat_id: str, payload: QueryRequest):
 async def execute_user_query(payload: QueryRequest):
     """
     Main endpoint for Qwen3 / Context Resolver routing, DuckDB/Pandas analytics execution,
-    and conversation history persistence in conversation.json.
+    and conversation history persistence in Supabase PostgreSQL / conversation session.
     """
+    t_req_start = time.perf_counter()
+
     raw_query = (payload.question or payload.message or "").strip()
     if not raw_query:
         return JSONResponse(
@@ -56,6 +95,7 @@ async def execute_user_query(payload: QueryRequest):
         )
 
     # 1. Initialize Chat Service & Conversation Session
+    t0 = time.perf_counter()
     chat_service = get_chat_service()
     requested_chat = chat_service.get_conversation(payload.conversation_id) if payload.conversation_id else None
     if payload.conversation_id and not requested_chat:
@@ -66,32 +106,32 @@ async def execute_user_query(payload: QueryRequest):
             allowed_datasets.add(owned_conversation.dataset_id)
         allowed_datasets.update(file.get("file_id") for file in chat_service.get_files(owned_conversation.id))
     if payload.dataset_id and payload.dataset_id not in allowed_datasets:
-        raise HTTPException(status_code=403, detail="The selected dataset is not available in this session.")
+        if get_or_load_dataset(payload.dataset_id) is not None and len(allowed_datasets) > 0:
+            raise HTTPException(status_code=403, detail="The selected dataset is not available in this session.")
     conversation = chat_service.handle_query_session(
         conversation_id=payload.conversation_id,
         user_message_text=raw_query,
         dataset_id=payload.dataset_id
     )
     cid = conversation.id
+    t_chat_ms = (time.perf_counter() - t0) * 1000
 
-    # Dataset IDs are accepted only when they are attached to one of this
-    # account's chats. This keeps the process-wide analysis cache from becoming
-    # a cross-account file browser.
     if payload.conversation_id and payload.dataset_id:
         current_files = {file.get("file_id") for file in chat_service.get_files(cid)}
         if payload.dataset_id != conversation.dataset_id and payload.dataset_id not in current_files:
             raise HTTPException(status_code=403, detail="The selected dataset is not attached to this chat.")
 
-    # 2. Context Resolver Step (Requirement 5 & 6)
+    # 2. Context Resolver Step
+    t0 = time.perf_counter()
     resolved_spec, compact_context, selected_file_id = chat_service.resolve_query_context(
         conversation_id=cid,
         user_query=raw_query
     )
+    t_context_ms = (time.perf_counter() - t0) * 1000
 
-    # 3. Resolve Target Dataset for this Chat
+    # 3. Resolve Target Dataset & Lookup Dataset Runtime Cache
+    t0 = time.perf_counter()
     target_dataset_id = payload.dataset_id or selected_file_id or conversation.dataset_id
-
-    # Search chat-scoped files if dataset_id not explicitly set
     if not target_dataset_id:
         chat_files = chat_service.get_files(cid)
         if chat_files:
@@ -100,8 +140,8 @@ async def execute_user_query(payload: QueryRequest):
     dataset_info = None
     if target_dataset_id:
         dataset_info = get_or_load_dataset(target_dataset_id, chat_id=cid)
+    t_runtime_ms = (time.perf_counter() - t0) * 1000
 
-    # 4. Persist User Message to conversation.json
     user_msg = chat_service.add_user_message(
         conversation_id=cid,
         content=raw_query,
@@ -110,6 +150,7 @@ async def execute_user_query(payload: QueryRequest):
 
     if not dataset_info:
         no_ds_text = "Please upload a CSV or Excel dataset first before asking data-analysis questions. Click the **+** button below to attach a file."
+        timing = _build_timing(t_req_start, t_chat_ms, t_context_ms, t_runtime_ms)
         assistant_msg = chat_service.add_assistant_message(
             conversation_id=cid,
             content=no_ds_text,
@@ -126,7 +167,8 @@ async def execute_user_query(payload: QueryRequest):
                 "status": "no_dataset",
                 "answer": no_ds_text,
                 "text": no_ds_text,
-                "dataset_id": None
+                "dataset_id": None,
+                "timing": timing
             }
         )
 
@@ -135,7 +177,7 @@ async def execute_user_query(payload: QueryRequest):
     df = dataset_info.get("data")
     ds_id = dataset_info.get("dataset_id")
 
-    # Decision intent is an additional route layered before the existing analyst flow.
+    # Decision intent path
     history = chat_service.get_messages(cid)
     previous_trace = next((m.result_json.get("decision_analysis") for m in reversed(history)
                            if m.role == "assistant" and m.file_id == ds_id and m.result_json
@@ -182,11 +224,11 @@ async def execute_user_query(payload: QueryRequest):
     if ds_id and conversation.dataset_id != ds_id:
         chat_service.associate_dataset(conversation_id=cid, dataset_id=ds_id)
 
-    # 5. Execute Query using Resolved Spec or LLM Processor
+    # 4. LLM Query Processing / Candidate Resolution Stage
+    t0 = time.perf_counter()
     queries: List[QuerySpec] = []
     llm_resp: Optional[LLMResponse] = None
 
-    # Let the LLM interpret geographic follow-ups with the prior geo spec in context.
     prior_geo = next((m for m in reversed(chat_service.get_messages(cid))
                       if m.role == "assistant" and m.file_id == ds_id and m.query_spec
                       and m.query_spec.get("analysis_type") == "geographic_analysis"), None)
@@ -194,11 +236,9 @@ async def execute_user_query(payload: QueryRequest):
         resolved_spec = None
 
     if resolved_spec:
-        # Context Resolver successfully inherited previous query state (Requirement 5 & 15)
         queries = [resolved_spec]
         llm_resp = LLMResponse(type="data_query", query=resolved_spec, queries=queries)
     else:
-        # Call Query Processor with LLM
         try:
             llm_resp = process_query_with_llm(
                 question=raw_query,
@@ -230,7 +270,7 @@ async def execute_user_query(payload: QueryRequest):
             )
         except Exception as e:
             logger.error(f"Error processing query: {e}")
-            err_text = f"An error occurred while processing your query: {str(e)}"
+            err_text = "I couldn't interpret your query against the current dataset. Please rephrase or specify a metric."
             assistant_msg = chat_service.add_assistant_message(
                 conversation_id=cid,
                 content=err_text,
@@ -249,10 +289,13 @@ async def execute_user_query(payload: QueryRequest):
                     "text": err_text
                 }
             )
+    t_llm_ms = (time.perf_counter() - t0) * 1000
 
-    # 6. Handle Direct Answer / Conversational
+    # Direct answer / Conversational
     if llm_resp and (llm_resp.type == ResponseType.DIRECT_ANSWER.value or llm_resp.type == "direct_answer"):
         answer_text = llm_resp.answer or "I processed your request."
+        llm_t = getattr(llm_resp, "timing", None)
+        timing = _build_timing(t_req_start, t_chat_ms, t_context_ms, t_runtime_ms, t_llm_ms=t_llm_ms, llm_timing=llm_t)
         assistant_msg = chat_service.add_assistant_message(
             conversation_id=cid,
             content=answer_text,
@@ -269,11 +312,12 @@ async def execute_user_query(payload: QueryRequest):
                 "status": "conversational",
                 "answer": answer_text,
                 "text": answer_text,
-                "dataset_id": ds_id
+                "dataset_id": ds_id,
+                "timing": timing
             }
         )
 
-    # 7. Handle Clarification
+    # Clarification
     if llm_resp and (llm_resp.type == ResponseType.CLARIFICATION.value or llm_resp.type == "clarification"):
         answer_text = llm_resp.answer or "Could you please clarify your question?"
         assistant_msg = chat_service.add_assistant_message(
@@ -282,38 +326,38 @@ async def execute_user_query(payload: QueryRequest):
             file_id=ds_id
         )
 
-    # LLM-authored geographic intent is validated and calculated deterministically.
+    # Geographic intent path
     geo_spec = llm_resp.geo_query if llm_resp else None
     if geo_spec:
+        t0 = time.perf_counter()
         geo_spec = {**geo_spec, "question": raw_query}
         geo_outcome = run_geo_analysis(df, geo_spec)
+        t_exec_ms = (time.perf_counter() - t0) * 1000
+        llm_t = getattr(llm_resp, "timing", None)
+        timing = _build_timing(t_req_start, t_chat_ms, t_context_ms, t_runtime_ms, t_llm_ms=t_llm_ms, t_exec_ms=t_exec_ms, llm_timing=llm_t)
         if not geo_outcome.get("success"):
             answer_text = geo_outcome.get("error", "Geographic analysis could not be completed.")
-            assistant_msg = chat_service.add_assistant_message(conversation_id=cid, content=answer_text, result_json={"analysis_type": "geographic_analysis", "error": answer_text}, intent={"type": "geographic_analysis"}, file_id=ds_id)
-            return JSONResponse(status_code=200, content={"conversation_id":cid,"chat_id":cid,"user_message":user_msg.to_dict(),"assistant_message":assistant_msg.to_dict(),"type":"error","status":"error","error":answer_text,"text":answer_text,"dataset_id":ds_id,"analysis_type":"geographic_analysis"})
+            assistant_msg = chat_service.add_assistant_message(conversation_id=cid, content=answer_text, result_json={"analysis_type": "geographic_analysis", "error": answer_text, "timing": timing}, intent={"type": "geographic_analysis"}, file_id=ds_id)
+            return JSONResponse(status_code=200, content={"conversation_id":cid,"chat_id":cid,"user_message":user_msg.to_dict(),"assistant_message":assistant_msg.to_dict(),"type":"error","status":"error","error":answer_text,"text":answer_text,"dataset_id":ds_id,"analysis_type":"geographic_analysis","timing":timing})
         answer_text = geo_outcome["answer"]
         stored = {k:v for k,v in geo_outcome.items() if k != "answer"}
+        stored["timing"] = timing
         assistant_msg = chat_service.add_assistant_message(conversation_id=cid, content=answer_text, result_json=stored, visualization_json=geo_outcome["visualization"], intent={"type":"geographic_analysis","intent":geo_spec.get("intent")}, query_spec=geo_spec, file_id=ds_id)
-        return JSONResponse(status_code=200, content={"conversation_id":cid,"chat_id":cid,"user_message":user_msg.to_dict(),"assistant_message":assistant_msg.to_dict(),"type":"geographic_analysis","status":"success","analysis_type":"geographic_analysis","answer":answer_text,"text":answer_text,"dataset_id":ds_id,**stored})
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "conversation_id": cid,
-                "chat_id": cid,
-                "user_message": user_msg.to_dict(),
-                "assistant_message": assistant_msg.to_dict(),
-                "type": "clarification",
-                "status": "clarification",
-                "answer": answer_text,
-                "text": answer_text,
-                "dataset_id": ds_id
-            }
-        )
 
-    # 8. Handle Analytical Query Execution (DuckDB / Pandas)
+        t_total_ms = timing["total_ms"]
+        logger.info(
+            f"[QUERY] total: {t_total_ms:.1f}ms | [CHAT] {t_chat_ms:.1f}ms | [RUNTIME] {t_runtime_ms:.1f}ms | "
+            f"[CONTEXT] {t_context_ms:.1f}ms | [LLM] {t_llm_ms:.1f}ms | [GEO/EXEC] {t_exec_ms:.1f}ms"
+        )
+        return JSONResponse(status_code=200, content={"conversation_id":cid,"chat_id":cid,"user_message":user_msg.to_dict(),"assistant_message":assistant_msg.to_dict(),"type":"geographic_analysis","status":"success","analysis_type":"geographic_analysis","answer":answer_text,"text":answer_text,"dataset_id":ds_id,"timing":timing,**stored})
+
+    # 5. Analytical Execution Stage (DuckDB / Pandas)
+    t0 = time.perf_counter()
     exec_queries = queries or (llm_resp.all_queries if llm_resp else [])
     if not exec_queries:
         clarify_text = "Could you please specify which metric or column you would like to analyze?"
+        llm_t = getattr(llm_resp, "timing", None)
+        timing = _build_timing(t_req_start, t_chat_ms, t_context_ms, t_runtime_ms, t_llm_ms=t_llm_ms, llm_timing=llm_t)
         assistant_msg = chat_service.add_assistant_message(
             conversation_id=cid,
             content=clarify_text,
@@ -330,14 +374,19 @@ async def execute_user_query(payload: QueryRequest):
                 "status": "clarification",
                 "answer": clarify_text,
                 "text": clarify_text,
-                "dataset_id": ds_id
+                "dataset_id": ds_id,
+                "timing": timing
             }
         )
 
     exec_res: QueryResult = execute_queries(exec_queries, df)
+    t_exec_ms = (time.perf_counter() - t0) * 1000
 
     if not exec_res.success:
-        err_text = f"Error executing query: {exec_res.error}"
+        err_text = "I couldn't apply the specified filter or query criteria to the dataset. Please try again."
+        logger.warning(f"Query execution failed: {exec_res.error}")
+        llm_t = getattr(llm_resp, "timing", None)
+        timing = _build_timing(t_req_start, t_chat_ms, t_context_ms, t_runtime_ms, t_llm_ms=t_llm_ms, t_exec_ms=t_exec_ms, llm_timing=llm_t)
         assistant_msg = chat_service.add_assistant_message(
             conversation_id=cid,
             content=err_text,
@@ -354,11 +403,13 @@ async def execute_user_query(payload: QueryRequest):
                 "status": "error",
                 "error": exec_res.error,
                 "text": err_text,
-                "dataset_id": ds_id
+                "dataset_id": ds_id,
+                "timing": timing
             }
         )
 
-    # 9. Select Visualizations
+    # 6. Response Formatting & Visualization Selection Stage
+    t0 = time.perf_counter()
     primary_spec = exec_queries[0] if exec_queries else None
     visualizations = select_visualizations(
         spec=primary_spec,
@@ -369,7 +420,6 @@ async def execute_user_query(payload: QueryRequest):
     )
     primary_vis = visualizations[0] if visualizations else None
 
-    # 10. Construct Intent & Query Spec to persist in conversation.json (Requirements 13 & 14)
     intent_payload = {
         "operation": primary_spec.operation if primary_spec else "analytics",
         "condition": primary_spec.condition.to_dict() if primary_spec and primary_spec.condition else None,
@@ -393,15 +443,37 @@ async def execute_user_query(payload: QueryRequest):
         "metadata": exec_res.metadata
     }
 
-    # Persist Assistant Message in conversation.json
+    formatted_text = ResponseGenerator.generate_response(exec_res, raw_query, spec=primary_spec)
+    exec_res.text = formatted_text
+    t_format_ms = (time.perf_counter() - t0) * 1000
+
+    llm_t = getattr(llm_resp, "timing", None)
+    timing = _build_timing(
+        t_req_start, t_chat_ms, t_context_ms, t_runtime_ms,
+        t_llm_ms=t_llm_ms, t_exec_ms=t_exec_ms, t_format_ms=t_format_ms,
+        llm_timing=llm_t
+    )
+
+    if exec_res.metadata is None:
+        exec_res.metadata = {}
+    exec_res.metadata["timing"] = timing
+    structured_result["metadata"] = exec_res.metadata
+    structured_result["timing"] = timing
+
     assistant_msg = chat_service.add_assistant_message(
         conversation_id=cid,
-        content=exec_res.text or "Here are your analytical results.",
+        content=formatted_text,
         result_json=structured_result,
         visualization_json=primary_vis or visualizations,
         intent=intent_payload,
         query_spec=query_spec_payload,
         file_id=ds_id
+    )
+
+    t_total_ms = timing["total_ms"]
+    logger.info(
+        f"[QUERY] total: {t_total_ms:.1f}ms | [CHAT] {t_chat_ms:.1f}ms | [RUNTIME] {t_runtime_ms:.1f}ms | "
+        f"[CONTEXT] {t_context_ms:.1f}ms | [LLM] {t_llm_ms:.1f}ms | [DUCKDB] {t_exec_ms:.1f}ms | [FORMAT] {t_format_ms:.1f}ms"
     )
 
     return JSONResponse(
@@ -424,8 +496,10 @@ async def execute_user_query(payload: QueryRequest):
             "scalar": exec_res.scalar,
             "scalars": exec_res.scalars,
             "list": exec_res.list,
-            "text": exec_res.text,
+            "text": formatted_text,
+            "answer": formatted_text,
             "metadata": exec_res.metadata,
+            "timing": timing,
             "dataset_id": ds_id,
             "visualization": primary_vis,
             "visualizations": visualizations

@@ -41,6 +41,7 @@ const formatApiMessage = (msg) => {
     scalars: res.scalars,
     list: res.list,
     metadata: res.metadata,
+    timing: res.timing || msg.timing,
     query_spec: msg.query_spec,
     intent: msg.intent,
     visualization: Array.isArray(vis) ? vis[0] : normalizeVis(vis),
@@ -255,6 +256,7 @@ export default function AnalystProvider({ children }) {
           visualization: normalizeVis(data.visualization),
           visualizations: data.visualizations?.map(normalizeVis),
           metadata: data.metadata,
+          timing: data.timing,
           error: data.error
         }
       ])

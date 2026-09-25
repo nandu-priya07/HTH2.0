@@ -6,11 +6,16 @@ multi-query, and multi-column conditional counts.
 
 import logging
 import re
+import time
+import hashlib
 from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from llm import OllamaClient, SYSTEM_PROMPT, build_dataset_context, build_user_prompt
 from .models import LLMResponse, QuerySpec, FilterSpec, SortSpec, ConditionSpec
+from .preprocessor import QueryPreprocessor
+from .candidate_resolver import CandidateResolver
+from .semantic_cache import SemanticQueryCache
 from geo.entity_discovery import discover_geo_profile
 from geo.metric_synthesis import resolve_metric, DERIVED_METRICS
 
@@ -23,7 +28,8 @@ def process_query_with_llm(
     profile: Optional[Dict[str, Any]] = None,
     df: Optional[pd.DataFrame] = None,
     dataset_id: Optional[str] = None,
-    conversation_context: Optional[Dict[str, Any]] = None
+    conversation_context: Optional[Dict[str, Any]] = None,
+    previous_query: Optional[Any] = None
 ) -> LLMResponse:
     """
     Processes a natural language question with Qwen3:8b via local Ollama.
@@ -60,59 +66,87 @@ def process_query_with_llm(
             answer=f"Which location field would you like to use: {', '.join(loc_cols[:4])}?" if loc_cols else "Which location column would you like to view?"
         )
 
-    # 1. Build Dataset Context & User Prompt
-    dataset_context = build_dataset_context(schema, profile, df, dataset_id)
-    user_prompt = build_user_prompt(clean_q, dataset_context, conversation_context)
+    if previous_query and not conversation_context:
+        prev_dict = previous_query.to_dict() if hasattr(previous_query, "to_dict") else previous_query
+        conversation_context = {"previous_result": {"query_spec": prev_dict}}
 
-    # 2. Call Ollama Qwen3:8b
+    # 1. Query Preprocessing & Casing / Abbreviation Normalization
+    t0 = time.perf_counter()
+    preprocessor = QueryPreprocessor()
+    prep_q = preprocessor.preprocess(clean_q)
+    norm_q = prep_q.normalized_query
+    pre_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+    # 2. Semantic Cache Lookup (by dataset_id + normalized_query + context_hash)
+    ctx_hash = hashlib.sha256(str(conversation_context or {}).encode("utf-8")).hexdigest()[:12]
+    cached_resp = SemanticQueryCache.get_cached_interpretation(dataset_id or "default", norm_q, ctx_hash)
+    if cached_resp:
+        return cached_resp
+
+    # 3. Schema & Value Candidate Resolution via RapidFuzz
+    t1 = time.perf_counter()
+    resolver = CandidateResolver()
+    cand_result = resolver.resolve(prep_q, df=df, schema=schema, dataset_id=dataset_id)
+    cand_dict = cand_result.to_compact_dict()
+    cand_ms = round((time.perf_counter() - t1) * 1000, 2)
+
+    # 4. Build Dataset Context & Prompt Enriched with Candidate Matches
+    dataset_context = build_dataset_context(schema, profile, df, dataset_id)
+    user_prompt = build_user_prompt(prep_q.original_query, dataset_context, conversation_context, candidates=cand_dict if cand_dict else None)
+
+    # 5. Call Ollama Qwen3 (Primary Semantic Query Interpreter)
+    t2 = time.perf_counter()
     client = OllamaClient()
     raw_data: Optional[Dict[str, Any]] = None
 
     llm_primary_succeeded = False
     if client.is_available():
         try:
-            raw_data = client.generate_json(SYSTEM_PROMPT, user_prompt)
+            # think=False disables Qwen3 reasoning output for ultra-low latency JSON generation
+            raw_data = client.generate_json(SYSTEM_PROMPT, user_prompt, think=False)
             llm_primary_succeeded = bool(raw_data)
         except Exception as e:
             logger.warning(f"Ollama call failed ({e}), falling back to deterministic router.")
             raw_data = None
+    llm_ms = round((time.perf_counter() - t2) * 1000, 2)
 
     if not raw_data or (isinstance(raw_data, dict) and raw_data.get("type") == "clarification" and "couldn't find a matching column" in str(raw_data.get("answer", "")).lower()):
-        fb_data = _fallback_router(clean_q, df, schema)
+        fb_data = _fallback_router(clean_q, df, schema, conversation_context=conversation_context)
         if not raw_data or fb_data.get("type") == "data_query":
             raw_data = fb_data
 
-
-    # 3. Parse LLM JSON into LLMResponse
+    # 6. Parse LLM JSON into LLMResponse
     resp = _parse_llm_json(raw_data, clean_q)
 
     if resp.geo_query and df is not None:
         resp.geo_query = _validate_llm_geo_plan(resp.geo_query, clean_q, df)
 
-    # Some model responses express a geo plan as a normal grouped QuerySpec.
-    # Normalize that structured LLM plan into the geo contract before legacy
-    # validation (which cannot validate a registered derived measure).
     if not resp.geo_query and resp.type == "data_query" and df is not None:
         resp.geo_query = _geo_query_from_grouped_plan(resp, clean_q, df)
 
-    # Emergency only: when Ollama is genuinely unavailable, adapt the existing
-    # deterministic fallback result into the validated geo contract.
     if not llm_primary_succeeded and df is not None and not resp.geo_query:
         fallback_geo = _fallback_geo_query(clean_q, df, conversation_context)
         if fallback_geo:
             resp.geo_query = fallback_geo
             resp.type = "data_query"
 
-    # Geographic plans have their own strict schema/data validator. The legacy
-    # QuerySpec validator would incorrectly reject safe derived metrics.
+    resp.timing = {
+        "preprocess_ms": pre_ms,
+        "candidate_ms": cand_ms,
+        "llm_inference_ms": llm_ms
+    }
+
     if resp.geo_query:
+        SemanticQueryCache.cache_interpretation(dataset_id or "default", norm_q, resp, ctx_hash)
         return resp
 
-    # 4. Zero Hallucination & Column Validation Guard
     if resp.type == "data_query" and resp.all_queries and df is not None:
         valid_resp = _validate_columns_against_df(resp, df)
+        valid_resp.timing = resp.timing
+        SemanticQueryCache.cache_interpretation(dataset_id or "default", norm_q, valid_resp, ctx_hash)
         return valid_resp
 
+    SemanticQueryCache.cache_interpretation(dataset_id or "default", norm_q, resp, ctx_hash)
     return resp
 
 
@@ -428,11 +462,12 @@ def _validate_columns_against_df(resp: LLMResponse, df: pd.DataFrame) -> LLMResp
 def _fallback_router(
     question: str,
     df: Optional[pd.DataFrame],
-    schema: Optional[Dict[str, Any]]
+    schema: Optional[Dict[str, Any]],
+    conversation_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Deterministic rule-based fallback adhering strictly to Qwen3's expected system behavior.
-    Handles single-queries, multi-queries, and multi-column conditional counts.
+    Handles single-queries, multi-queries, multi-column conditional counts, and follow-ups.
     """
     q = question.strip().lower()
     q_clean = re.sub(r"[^\w\s]", "", q).strip()
@@ -455,6 +490,45 @@ def _fallback_router(
         if t_norm.endswith("s") and t_norm[:-1] in norm_col_map:
             return norm_col_map[t_norm[:-1]]
         return None
+
+    # Handle follow-up query sequence if conversation_context is provided
+    prev_spec = (conversation_context or {}).get("previous_result", {}).get("query_spec") or (conversation_context or {}).get("previous_query")
+    if prev_spec and isinstance(prev_spec, dict):
+        # 1. "Break this down by <col>" or "group by <col>"
+        group_match = re.search(r"\b(?:break\s+(?:this\s+)?down\s+by|group\s+by|by)\s+([a-zA-Z0-9_\s]+)", q)
+        if group_match:
+            g_term = group_match.group(1).strip()
+            g_col = resolve(g_term)
+            if g_col:
+                new_spec = dict(prev_spec)
+                new_spec["group_by"] = [g_col]
+                return {"type": "data_query", "queries": [new_spec]}
+
+        # 2. "What about <val>?" or "How about <val>?"
+        about_match = re.search(r"\b(?:what|how)\s+about\s+(.+?)\??$", q)
+        if about_match:
+            new_val_raw = about_match.group(1).strip()
+            if df is not None and prev_spec.get("filters"):
+                first_filter = dict(prev_spec["filters"][0])
+                first_filter["value"] = new_val_raw.title() if new_val_raw.islower() else new_val_raw
+                new_spec = dict(prev_spec)
+                new_spec["filters"] = [first_filter]
+                return {"type": "data_query", "queries": [new_spec]}
+
+        # 3. "Only <val>." or "Just <val>."
+        only_match = re.search(r"\b(?:only|just)\s+(.+?)[.!]?$", q)
+        if only_match:
+            val_term = only_match.group(1).strip()
+            if df is not None:
+                for col in df.columns:
+                    unique_vals = [str(v).strip().lower() for v in df[col].dropna().unique()]
+                    if val_term.lower() in unique_vals:
+                        target_val = next(str(v) for v in df[col].dropna().unique() if str(v).strip().lower() == val_term.lower())
+                        new_filters = [dict(f) for f in prev_spec.get("filters", [])]
+                        new_filters.append({"column": col, "operator": "equals", "value": target_val})
+                        new_spec = dict(prev_spec)
+                        new_spec["filters"] = new_filters
+                        return {"type": "data_query", "queries": [new_spec]}
 
     # Strip trailing visualization directives for cleaner semantic extraction
     q_base = re.sub(r"\b(?:using|as|in)\s+(?:a\s+)?(?:pie|bar|line|scatter|table|column)\s+(?:chart|plot|graph|table)\b.*$", "", q).strip()

@@ -189,10 +189,10 @@ def _build_calculation_steps(result: QueryResult, spec: QuerySpec, exec_spec: Qu
         steps.append(f"Started with {_rows(before)}.")
     for t in trace:
         steps.append(f"Filtered {_format_filter_step(t['filter'])} → {_rows(t['rows_after'])}.")
-    derived = spec.derived_metric
-    if derived is not None and derived.kind == "expression":
+    derived = getattr(spec, "derived_metric", None)
+    if derived is not None and getattr(derived, "kind", None) == "expression":
         steps.append(f"Calculated {derived.name} = {derived.formula} for each row.")
-    elif derived is not None and derived.kind == "count_distinct":
+    elif derived is not None and getattr(derived, "kind", None) == "count_distinct":
         steps.append(f"Counted distinct {derived.source_column} values as {derived.name.replace('_', ' ')}.")
     if exec_spec.group_by:
         groups = meta.get("groups_total", meta.get("groups_count"))
@@ -212,17 +212,18 @@ def _finalize_result(result: QueryResult, spec: QuerySpec, exec_spec: QuerySpec,
         result.status = "error"
 
     fields = list(meta.get("fields_used") or [])
-    derived = spec.derived_metric
+    derived = getattr(spec, "derived_metric", None)
     if derived is not None:
-        derived_dict = derived.to_dict()
+        derived_dict = derived.to_dict() if hasattr(derived, "to_dict") else derived
         # The materialized helper column is not a dataset field; report its real inputs instead.
-        if derived.kind == "expression":
+        if getattr(derived, "kind", None) == "expression":
             fields = [f for f in fields if f != exec_spec.column]
-        fields = list(dict.fromkeys(list(derived.required_columns) + fields))
+        req_cols = getattr(derived, "required_columns", []) or []
+        fields = list(dict.fromkeys(list(req_cols) + fields))
         meta["derived_metric"] = derived_dict
         result.derived_metric = derived_dict
-        if result.scalar and derived.kind == "expression":
-            result.scalar["metric"] = derived.name
+        if result.scalar and getattr(derived, "kind", None) == "expression":
+            result.scalar["metric"] = getattr(derived, "name", "derived")
     if fields:
         meta["fields_used"] = fields
     result.fields_used = fields or None
@@ -237,10 +238,12 @@ def _finalize_result(result: QueryResult, spec: QuerySpec, exec_spec: QuerySpec,
     if result.success:
         result.calculation_steps = _build_calculation_steps(result, spec, exec_spec, trace)
         meta["calculation_steps"] = result.calculation_steps
-    if spec.requested_metric:
-        meta["requested_metric"] = spec.requested_metric
-    if spec.metric_mapping:
-        meta["metric_mapping"] = spec.metric_mapping
+    req_metric = getattr(spec, "requested_metric", None)
+    if req_metric:
+        meta["requested_metric"] = req_metric
+    met_map = getattr(spec, "metric_mapping", None)
+    if met_map:
+        meta["metric_mapping"] = met_map
     result.metadata = meta
     return result
 
@@ -251,7 +254,8 @@ def execute_query(spec: QuerySpec, df: pd.DataFrame) -> QueryResult:
     Filters are always applied before aggregation; derived metrics are computed per row first.
     """
     exec_spec, work_df = spec, df
-    if spec.derived_metric is not None and spec.derived_metric.kind == "expression":
+    derived = getattr(spec, "derived_metric", None)
+    if derived is not None and getattr(derived, "kind", None) == "expression":
         try:
             work_df, exec_spec = _materialize_derived_metric(df, spec)
         except ValueError as e:
@@ -280,7 +284,16 @@ def _execute_query_core(spec: QuerySpec, df: pd.DataFrame, filter_trace: Optiona
     def _resolve_col(name: Optional[str]) -> Optional[str]:
         if not name:
             return None
-        return col_map.get(name.lower(), name)
+        c_clean = str(name).strip().lower()
+        if c_clean in col_map:
+            return col_map[c_clean]
+        stripped = re.sub(r"^(?:sum|avg|average|mean|count|max|maximum|min|minimum)\((.+)\)$", r"\1", c_clean).strip()
+        if stripped in col_map:
+            return col_map[stripped]
+        stripped_prefix = re.sub(r"^(?:total|sum|average|avg|mean|max|maximum|min|minimum|count of|count)\s+", "", c_clean).strip()
+        if stripped_prefix in col_map:
+            return col_map[stripped_prefix]
+        return col_map.get(c_clean, name)
 
     # Validate target column if specified
     if spec.column:
@@ -664,7 +677,10 @@ def _count_column_condition(series: pd.Series, op: str, val: Any) -> int:
     if len(series) == 0:
         return 0
 
-    if op in ("equals", "=", "=="):
+    from .models import normalize_operator
+    norm_op = normalize_operator(op)
+
+    if norm_op in ("equals", "=", "==", "eq"):
         if val is None:
             return int(series.isna().sum())
         # String match ignoring case and whitespace
@@ -672,7 +688,7 @@ def _count_column_condition(series: pd.Series, op: str, val: Any) -> int:
         str_val = str(val).strip()
         return int((str_series.str.upper() == str_val.upper()).sum())
 
-    elif op in ("!=", "<>"):
+    elif norm_op in ("!=", "<>", "neq"):
         if val is None:
             return int(series.notna().sum())
         str_series = series.astype(str).str.strip()
