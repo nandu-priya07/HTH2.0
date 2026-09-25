@@ -43,8 +43,9 @@ class ValueIndexer:
         columns_indexed: List[str] = []
 
         if df is not None and not df.empty:
-            for col in df.columns:
-                series = df[col].dropna()
+            sample_df = df.sample(n=50000, random_state=42) if len(df) > 50000 else df
+            for col in sample_df.columns:
+                series = sample_df[col].dropna()
                 # Index object/string/categorical or low-cardinality columns
                 if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series) or series.nunique() <= max_distinct_per_col:
                     val_counts = series.astype(str).str.strip().value_counts().head(max_distinct_per_col)

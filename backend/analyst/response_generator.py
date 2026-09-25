@@ -23,6 +23,82 @@ class ResponseGenerator:
             err = result.error or "Analysis could not be completed."
             return f"I couldn't complete the request: {err}"
 
+        # 0. Analytical Reasoning & Special Analytical Intents Response Formatting
+        reasoning = result.reasoning
+        canonical = result.canonical_data or {}
+        intent = canonical.get("intent") or (result.query.get("intent") if isinstance(result.query, dict) else None)
+
+        if intent == "forecast" or result.forecast_data:
+            fc_data = result.forecast_data or canonical
+            metric = fc_data.get("metric", "metric")
+            fc_list = fc_data.get("forecast", [])
+            model = fc_data.get("model", "Statistical Model")
+            conf = fc_data.get("confidence", "Moderate")
+
+            lines = [f"### Forecast for {metric.title()}\n"]
+            lines.append(f"Model: **{model}** (Confidence: **{conf}**)\n")
+            for item in fc_list:
+                lines.append(f"- **{item['period']}**: **${item['predicted']:,.2f}** (Range: ${item['lower']:,.2f} – ${item['upper']:,.2f})")
+
+            if reasoning:
+                lines.append("\n### Interpretation")
+                lines.append(reasoning.get("summary") or reasoning.get("forecast_interpretation") or "")
+                if reasoning.get("trend"):
+                    lines.append(f"\n**Trend Pattern:** {reasoning.get('trend')}")
+                if reasoning.get("uncertainty"):
+                    lines.append(f"\n**Uncertainty & Bounds:** {reasoning.get('uncertainty')}")
+                if reasoning.get("limitations"):
+                    lines.append(f"\n**Limitations:** {reasoning.get('limitations')}")
+
+            lines.append(f"\n### Evidence\n- Method: {model}\n- Horizon: {len(fc_list)} period(s)\n- Historical records analyzed: {result.rows_before_filter or 0:,}")
+            return "\n".join(lines)
+
+        if intent == "anomaly_detection" or result.anomaly_data:
+            anom_data = result.anomaly_data or canonical
+            metric = anom_data.get("metric", "metric")
+            anom_list = anom_data.get("anomalies", [])
+
+            lines = [f"### Anomaly Detection Results for {metric.title()}\n"]
+            if anom_list:
+                lines.append(f"Found **{len(anom_list)}** statistical anomalies (|Z-Score| ≥ 2.0):\n")
+                for a in anom_list[:5]:
+                    lines.append(f"- **{a['period']}**: Actual = **{a['value']:,.2f}** vs Expected = **{a['expected']:,.2f}** (Z-Score: {a['z_score']:+.2f}, Severity: **{a['severity']}**)")
+            else:
+                lines.append(f"No statistical anomalies detected in **{metric.title()}** (all values within standard 2.0 deviation threshold).\n")
+
+            if reasoning:
+                lines.append("\n### Interpretation")
+                lines.append(reasoning.get("summary") or "")
+                if reasoning.get("key_findings"):
+                    lines.append("\n**Key Findings:**")
+                    for kf in reasoning["key_findings"]:
+                        lines.append(f"- {kf}")
+
+            lines.append(f"\n### Evidence\n- Criteria: {anom_data.get('threshold', 'Z-Score >= 2.0')}\n- Mean Baseline: {anom_data.get('baseline_mean', 0.0):,.2f}")
+            return "\n".join(lines)
+
+        if reasoning and isinstance(reasoning, dict):
+            lines = []
+            if reasoning.get("summary"):
+                lines.append(f"### Answer\n{reasoning['summary']}\n")
+            if reasoning.get("key_findings"):
+                lines.append("### Key Findings")
+                for kf in reasoning["key_findings"]:
+                    lines.append(f"- {kf}")
+                lines.append("")
+            if reasoning.get("reasoning"):
+                lines.append("### Reasoning & Analysis")
+                for r in reasoning["reasoning"]:
+                    lines.append(f"- {r}")
+                lines.append("")
+            if reasoning.get("limitations"):
+                lines.append("### Limitations")
+                for lim in reasoning["limitations"]:
+                    lines.append(f"- {lim}")
+                lines.append("")
+            if lines:
+                return "\n".join(lines)
+
         # 1. GEO_ANALYSIS Result
         if result.metadata and result.metadata.get("analysis_type") == "geographic_analysis":
             return result.text or result.answer or "Geographic analysis completed."
@@ -106,12 +182,16 @@ class ResponseGenerator:
             else:
                 scope_title = f"The total **{metric}** is **{formatted_val}**."
 
-            lines = [scope_title, "\nDetails:"]
-            if filters and isinstance(filters[0], dict):
-                lines.append(f"- {filters[0].get('column', 'Scope').title()}: {filters[0].get('value')}")
-            lines.append(f"- Metric: {metric.title()}")
-            lines.append(f"- Aggregation: {op}")
-            lines.append(f"- Records analyzed: {result.rows_after_filter or result.rows_before_filter or 0:,}")
+            lines = [scope_title, "\n### How we got this answer\n"]
+            lines.append(f"1. Selected the `{metric}` field.")
+            lines.append(f"2. Analyzed {result.rows_after_filter or result.rows_before_filter or 0:,} records.")
+            if filters:
+                filter_strs = [f"{f.get('column')} = {f.get('value')}" for f in filters if isinstance(f, dict)]
+                lines.append(f"3. Applied filter: {', '.join(filter_strs)}.")
+            else:
+                lines.append("3. Applied no filters.")
+            lines.append(f"4. Calculated {op}({metric}).")
+            lines.append(f"5. Result = **{formatted_val}**.")
             return "\n".join(lines)
 
         return result.text or result.answer or "Analysis complete."

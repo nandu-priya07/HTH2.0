@@ -12,6 +12,12 @@ import duckdb
 
 from .models import QuerySpec, QueryResult, ResponseType
 from .validator import validate_query_spec, validate_queries
+from .profiler_engine import run_dataset_summary
+from .trend_engine import run_trend_analysis
+from .forecast_engine import run_forecast_analysis
+from .anomaly_engine import run_anomaly_detection
+from .insight_engine import run_complex_insight, run_comparison, run_decision_analysis
+
 
 
 class ZeroMatchError(Exception):
@@ -371,6 +377,22 @@ def _execute_query_core(spec: QuerySpec, df: pd.DataFrame, filter_trace: Optiona
     fields_used = _gather_fields_used(spec, target_col, group_cols)
     filters_applied = [f.to_dict() if hasattr(f, 'to_dict') else f for f in (spec.filters or [])]
     op = (spec.operation or "count").lower().strip()
+
+    # Analytical Engines Dispatch
+    if op == "dataset_summary":
+        return run_dataset_summary(df, spec)
+    if op == "trend":
+        return run_trend_analysis(df_copy, spec)
+    if op == "forecast":
+        return run_forecast_analysis(df_copy, spec)
+    if op == "anomaly_detection":
+        return run_anomaly_detection(df_copy, spec)
+    if op in ("complex_insight", "why", "cause"):
+        return run_complex_insight(df_copy, spec)
+    if op == "comparison":
+        return run_comparison(df_copy, spec)
+    if op == "decision_analysis":
+        return run_decision_analysis(df_copy, spec)
 
     # 3b. RECORD_LOOKUP Operation
     if op == "record_lookup":

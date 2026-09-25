@@ -21,7 +21,17 @@ SUPPORTED_OPERATIONS = {
     "column_value_distribution",
     "multi_column_value_distribution",
     "value_distribution",
-    "record_lookup"
+    "record_lookup",
+    "dataset_summary",
+    "aggregation",
+    "ranking",
+    "comparison",
+    "trend",
+    "forecast",
+    "anomaly_detection",
+    "complex_insight",
+    "decision_analysis",
+    "geo_analysis"
 }
 
 
@@ -59,7 +69,11 @@ def validate_query_spec(
 
     df_col_lower_map = {c.lower(): c for c in df.columns}
 
-    # 0. Validate record_lookup
+    # 0. Validate dataset_summary and high-level analytical intents that don't strictly require target column
+    if op in ("dataset_summary", "complex_insight", "decision_analysis"):
+        return True, None
+
+    # Validate record_lookup
     if op == "record_lookup":
         if spec.columns:
             for col in spec.columns:
@@ -113,7 +127,6 @@ def validate_query_spec(
 
         return True, None
 
-
     # 3. Validate single column / columns for standard operations
     if spec.column:
         col_actual = df_col_lower_map.get(spec.column.lower())
@@ -133,7 +146,7 @@ def validate_query_spec(
             if col.lower() not in df_col_lower_map:
                 return False, f"The dataset does not contain a field corresponding to '{col}'."
 
-    elif op != "count":
+    elif op not in ("count", "trend", "forecast", "anomaly_detection", "comparison", "ranking", "aggregation", "geo_analysis"):
         return False, f"Operation '{op}' requires a target column."
 
     # 3. Validate group_by columns

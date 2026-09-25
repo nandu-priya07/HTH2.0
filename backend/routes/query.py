@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from analyst import process_query_with_llm, execute_query, execute_queries, LLMResponse, QueryResult, ResponseType
 from analyst.response_generator import ResponseGenerator
 from analyst.models import QuerySpec
+from reasoning.reasoning_engine import generate_analytical_reasoning
 from storage.dataset_manager import get_or_load_dataset
 from visualization.selector import select_visualizations
 from chat import get_chat_service
@@ -50,6 +51,7 @@ def _build_timing(
     t_runtime_ms: float = 0.0,
     t_llm_ms: float = 0.0,
     t_exec_ms: float = 0.0,
+    t_reason_ms: float = 0.0,
     t_format_ms: float = 0.0,
     llm_timing: Optional[Dict[str, Any]] = None,
     cache_hit: bool = True
@@ -66,6 +68,10 @@ def _build_timing(
 
     timing_dict = {
         "total_ms": round(t_total_ms, 2),
+        "query_understanding_ms": round(t_llm_ms, 2),
+        "analytics_ms": round(t_exec_ms, 2),
+        "reasoning_ms": round(t_reason_ms, 2),
+        "response_formatting_ms": round(t_format_ms, 2),
         "chat_ms": round(t_chat_ms, 2),
         "context_ms": round(t_context_ms, 2),
         "runtime_ms": round(t_runtime_ms, 2),
@@ -92,8 +98,9 @@ def _build_timing(
             "preprocess": f"{pre_ms:.2f}ms",
             "value_resolution": f"{cand_ms:.2f}ms",
             "prompt_build": f"{prompt_ms:.2f}ms ({prompt_chars} chars, ~{est_tokens} tokens)",
-            "llm_query_understanding": f"{t_llm_ms:.2f}ms ({llm_calls} call)",
+            "query_understanding": f"{t_llm_ms:.2f}ms ({llm_calls} call)",
             "analytical_execution": f"{t_exec_ms:.2f}ms",
+            "reasoning_layer": f"{t_reason_ms:.2f}ms",
             "response_formatting": f"{t_format_ms:.2f}ms",
             "total_request_time": f"{t_total_ms:.2f}ms"
         }
@@ -131,12 +138,14 @@ async def execute_user_query(payload: QueryRequest):
     if payload.conversation_id and not requested_chat:
         raise HTTPException(status_code=404, detail="Chat not found for this session.")
 
+    cid = payload.conversation_id or (requested_chat.id if requested_chat else None)
+
     t0 = time.perf_counter()
+    files_list = chat_service.get_files(cid) if cid else []
     if payload.conversation_id and payload.dataset_id:
         conv_ds_id = requested_chat.dataset_id if requested_chat else None
         if payload.dataset_id != conv_ds_id:
-            chat_files = chat_service.get_files(payload.conversation_id)
-            chat_file_ids = {f.get("file_id") for f in chat_files} if chat_files else set()
+            chat_file_ids = {f.get("file_id") for f in files_list} if files_list else set()
             if payload.dataset_id not in chat_file_ids and get_or_load_dataset(payload.dataset_id) is None:
                 raise HTTPException(status_code=403, detail="The selected dataset is not available in this session.")
     t_ds_lookup_ms = (time.perf_counter() - t0) * 1000
@@ -145,7 +154,8 @@ async def execute_user_query(payload: QueryRequest):
     conversation = chat_service.handle_query_session(
         conversation_id=payload.conversation_id,
         user_message_text=raw_query,
-        dataset_id=payload.dataset_id
+        dataset_id=payload.dataset_id,
+        existing_conversation=requested_chat
     )
     cid = conversation.id
     t_session_recon_ms = (time.perf_counter() - t0) * 1000
@@ -156,7 +166,6 @@ async def execute_user_query(payload: QueryRequest):
     t_msg_hist_ms = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()
-    files_list = chat_service.get_files(cid)
     resolved_spec, compact_context, selected_file_id = chat_service.context_resolver.resolve_context(
         chat_id=cid,
         current_query=raw_query,
@@ -459,9 +468,17 @@ async def execute_user_query(payload: QueryRequest):
             }
         )
 
-    # 6. Response Formatting & Visualization Selection Stage
-    t0 = time.perf_counter()
+    # 6. Analytical Reasoning & Response Formatting Stage
     primary_spec = exec_queries[0] if exec_queries else None
+
+    t_reason_start = time.perf_counter()
+    if primary_spec:
+        reasoning_res = generate_analytical_reasoning(raw_query, primary_spec, exec_res)
+        if reasoning_res:
+            exec_res.reasoning = reasoning_res
+    t_reason_ms = (time.perf_counter() - t_reason_start) * 1000
+
+    t0 = time.perf_counter()
     visualizations = select_visualizations(
         spec=primary_spec,
         query_result=exec_res,
@@ -491,6 +508,7 @@ async def execute_user_query(payload: QueryRequest):
         "scalar": exec_res.scalar,
         "scalars": exec_res.scalars,
         "list": exec_res.list,
+        "reasoning": exec_res.reasoning,
         "metadata": exec_res.metadata
     }
 
@@ -501,7 +519,7 @@ async def execute_user_query(payload: QueryRequest):
     llm_t = getattr(llm_resp, "timing", None)
     timing = _build_timing(
         t_req_start, t_chat_ms, t_context_ms, t_runtime_ms,
-        t_llm_ms=t_llm_ms, t_exec_ms=t_exec_ms, t_format_ms=t_format_ms,
+        t_llm_ms=t_llm_ms, t_exec_ms=t_exec_ms, t_reason_ms=t_reason_ms, t_format_ms=t_format_ms,
         llm_timing=llm_t
     )
 

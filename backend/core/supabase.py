@@ -80,29 +80,45 @@ def get_supabase_connection() -> Generator[psycopg2.extensions.connection, None,
         pool.putconn(conn)
 
 
+import threading
+
+_db_initialized = False
+_db_init_lock = threading.Lock()
+
+
 def initialize_supabase_database() -> None:
     """
-    Ensures all required Supabase tables, indexes, and schemas exist.
+    Ensures all required Supabase tables, indexes, and schemas exist once at process startup.
     """
-    schema_path = BACKEND_DIR / "supabase_schema.sql"
-    if not schema_path.exists():
-        logger.warning(f"Schema file not found at {schema_path}")
+    global _db_initialized
+    if _db_initialized:
         return
 
-    try:
-        with open(schema_path, "r", encoding="utf-8") as f:
-            sql_script = f.read()
+    with _db_init_lock:
+        if _db_initialized:
+            return
 
-        with get_supabase_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql_script)
-                # Ensure datasets storage bucket exists in storage.buckets
-                cur.execute("""
-                    INSERT INTO storage.buckets (id, name, public) 
-                    VALUES ('datasets', 'datasets', false) 
-                    ON CONFLICT (id) DO NOTHING;
-                """)
-        logger.info("Supabase PostgreSQL database successfully verified & initialized.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Supabase database: {e}")
-        raise
+        schema_path = BACKEND_DIR / "supabase_schema.sql"
+        if not schema_path.exists():
+            logger.warning(f"Schema file not found at {schema_path}")
+            _db_initialized = True
+            return
+
+        try:
+            with open(schema_path, "r", encoding="utf-8") as f:
+                sql_script = f.read()
+
+            with get_supabase_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql_script)
+                    # Ensure datasets storage bucket exists in storage.buckets
+                    cur.execute("""
+                        INSERT INTO storage.buckets (id, name, public) 
+                        VALUES ('datasets', 'datasets', false) 
+                        ON CONFLICT (id) DO NOTHING;
+                    """)
+            _db_initialized = True
+            logger.info("Supabase PostgreSQL database successfully verified & initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize Supabase database: {e}")
+            raise

@@ -20,7 +20,17 @@ class QueryOperation(str, Enum):
     COLUMN_VALUE_COUNT = "column_value_count"
     COLUMN_VALUE_DISTRIBUTION = "column_value_distribution"
     RECORD_LOOKUP = "record_lookup"
-
+    # New Analytical Intents:
+    DATASET_SUMMARY = "dataset_summary"
+    AGGREGATION = "aggregation"
+    RANKING = "ranking"
+    COMPARISON = "comparison"
+    TREND = "trend"
+    FORECAST = "forecast"
+    ANOMALY_DETECTION = "anomaly_detection"
+    COMPLEX_INSIGHT = "complex_insight"
+    DECISION_ANALYSIS = "decision_analysis"
+    GEO_ANALYSIS = "geo_analysis"
 
 
 class ResponseType(str, Enum):
@@ -166,8 +176,8 @@ class DerivedMetricSpec(BaseModel):
 
 class QuerySpec(BaseModel):
     """
-    Structured query representation produced by Qwen3.
-    Supports single column, multi-column (e.g. conditional_count), and grouping.
+    Structured query representation produced by fast-path router or Qwen3.
+    Supports single column, multi-column, grouping, analytical intents, and forecasting.
     """
     operation: str = "count"
     column: Optional[str] = None
@@ -181,6 +191,15 @@ class QuerySpec(BaseModel):
     derived_metric: Optional[Any] = None
     requested_metric: Optional[Any] = None
     metric_mapping: Optional[Any] = None
+
+    # Analytical and Forecasting fields:
+    intent: Optional[str] = None
+    time_column: Optional[str] = None
+    frequency: Optional[str] = None
+    horizon: Optional[int] = None
+    target_column: Optional[str] = None
+    comparison_columns: List[str] = Field(default_factory=list)
+    options: List[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         if self.columns:
@@ -242,7 +261,7 @@ class LLMResponse(BaseModel):
 
 class QueryResult(BaseModel):
     """
-    Result returned by the Query Executor after Pandas calculation.
+    Result returned by the Query Executor after pandas/analytical execution.
     """
     success: bool = True
     type: str = "data_result"
@@ -269,5 +288,17 @@ class QueryResult(BaseModel):
     group_by: Optional[List[str]] = None
     calculation_steps: Optional[List[str]] = None
 
+    # Analytical Reasoning & Engines attributes:
+    canonical_data: Optional[Dict[str, Any]] = None
+    reasoning: Optional[Dict[str, Any]] = None
+    evidence: Optional[Dict[str, Any]] = None
+    forecast_data: Optional[Dict[str, Any]] = None
+    anomaly_data: Optional[Dict[str, Any]] = None
+    summary_data: Optional[Dict[str, Any]] = None
+    trend_data: Optional[Dict[str, Any]] = None
+    decision_data: Optional[Dict[str, Any]] = None
+    comparison_data: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
+

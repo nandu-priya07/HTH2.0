@@ -634,6 +634,157 @@ def _fallback_router(
     q_base = re.sub(r"\b(?:and\s+)?(?:choose|pick|select|use)\s+(?:the\s+)?(?:best|suitable|appropriate|automatic)\s+(?:chart|visualization|plot)\b.*$", "", q_base).strip()
 
 
+    # 0a. Dataset Summary Intent
+    if any(k in q for k in ("summarize this dataset", "summary of dataset", "summarize dataset", "dataset summary", "overview of dataset", "important patterns in this dataset")):
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "dataset_summary",
+                    "intent": "dataset_summary",
+                    "columns": [],
+                    "filters": [],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 0b. Forecast / Prediction Intent
+    if re.search(r"\b(predict|forecast|projection|project)\b", q):
+        metric_cand = None
+        for m in ("sales", "profit", "revenue", "orders", "quantity", "cost"):
+            if m in q:
+                metric_cand = m
+                break
+        horizon_match = re.search(r"\b(\d+)\s*(months?|quarters?|years?|days?)\b", q)
+        horizon_val = int(horizon_match.group(1)) if horizon_match else 3
+        freq_val = horizon_match.group(2).lower() if horizon_match else "month"
+
+        filters_list = []
+        if df is not None:
+            for c in df.columns:
+                if any(k in c.lower() for k in ("state", "region", "country", "category")):
+                    unique_vals = [str(v) for v in df[c].dropna().unique()]
+                    for uv in unique_vals:
+                        if re.search(rf"\b{re.escape(uv.lower())}\b", q):
+                            filters_list.append({"column": c, "operator": "=", "value": uv})
+                            break
+
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "forecast",
+                    "intent": "forecast",
+                    "column": metric_cand or "sales",
+                    "horizon": horizon_val,
+                    "frequency": freq_val,
+                    "filters": filters_list,
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 0c. Trend Intent
+    if re.search(r"\b(trend|growth pattern|historical pattern)\b", q) and not re.search(r"\b(predict|forecast)\b", q):
+        metric_cand = None
+        for m in ("sales", "profit", "revenue", "orders"):
+            if m in q:
+                metric_cand = m
+                break
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "trend",
+                    "intent": "trend",
+                    "column": metric_cand or "sales",
+                    "filters": [],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 0d. Anomaly Detection Intent
+    if re.search(r"\b(unusual|anomalous|outliers?|anomaly|abnormal)\b", q):
+        metric_cand = None
+        for m in ("sales", "profit", "revenue", "orders"):
+            if m in q:
+                metric_cand = m
+                break
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "anomaly_detection",
+                    "intent": "anomaly_detection",
+                    "column": metric_cand or "sales",
+                    "filters": [],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 0e. Comparison Intent
+    comp_match = re.search(r"\bcompare\s+([a-zA-Z0-9_\s]+)\s+and\s+([a-zA-Z0-9_\s]+)", q)
+    if comp_match:
+        opt1 = comp_match.group(1).strip().title()
+        opt2 = comp_match.group(2).strip().title()
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "comparison",
+                    "intent": "comparison",
+                    "options": [opt1, opt2],
+                    "filters": [],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 0f. Decision Analysis Intent
+    if re.search(r"\b(should we focus on|what should we prioritize|which category should we focus|where to invest)\b", q):
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "decision_analysis",
+                    "intent": "decision_analysis",
+                    "filters": [],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
+    # 0g. Why / Cause / Complex Insight Intent
+    if re.search(r"\b(why did|why is|what caused|which states are performing poorly|performing poorly|most profitable and why)\b", q):
+        return {
+            "type": "data_query",
+            "queries": [
+                {
+                    "operation": "complex_insight",
+                    "intent": "complex_insight",
+                    "filters": [],
+                    "group_by": [],
+                    "sort": [],
+                    "limit": None
+                }
+            ]
+        }
+
     # 1. Direct answer: Conversational
     greetings = {"hello", "hi", "hey", "good morning", "good afternoon", "thanks", "thank you", "who are you"}
     if q_clean in greetings or q_clean.startswith(("hello ", "hi ", "hey ")):

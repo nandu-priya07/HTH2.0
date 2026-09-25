@@ -38,13 +38,17 @@ UPLOAD_DIR = RAW_DIR
 
 
 def _get_session_dataset(dataset_id: str):
+    # Direct lookup by dataset_id first (fast-path)
+    res = get_or_load_dataset(dataset_id)
+    if res:
+        return res
+    # Fallback to chat association if needed
     service = get_chat_service()
-    for conversation in service.list_conversations(limit=500):
+    for conversation in service.list_conversations(limit=20):
         attached = {item.get("file_id") for item in service.get_files(conversation.id)}
         if conversation.dataset_id == dataset_id or dataset_id in attached:
             return get_or_load_dataset(dataset_id, chat_id=conversation.id)
-    # Check directly by dataset_id
-    return get_or_load_dataset(dataset_id)
+    return None
 
 
 def process_and_store_chat_file(

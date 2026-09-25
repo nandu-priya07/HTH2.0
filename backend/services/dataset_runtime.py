@@ -179,6 +179,13 @@ class DatasetRuntime:
         return self.to_dict().values()
 
 
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+
 class DatasetRuntimeManager:
     """
     Centralized Dataset Runtime Manager.
@@ -193,7 +200,7 @@ class DatasetRuntimeManager:
         self._cache: Dict[str, DatasetRuntime] = {}
         self._loading_locks: Dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
-        self.max_cache_size: int = int(os.getenv("DATASET_RUNTIME_CACHE_SIZE", "3"))
+        self.max_cache_size: int = int(os.getenv("DATASET_RUNTIME_CACHE_SIZE", "20"))
 
     @classmethod
     def get_instance(cls) -> "DatasetRuntimeManager":
@@ -244,7 +251,7 @@ class DatasetRuntimeManager:
         existing_info: Optional[Dict[str, Any]] = None
     ) -> Optional[DatasetRuntime]:
         """
-        Loads dataset runtime once: from memory, provided DataFrame, or Supabase Storage.
+        Loads dataset runtime once: from memory, provided DataFrame, local disk, or Supabase Storage.
         Uses per-dataset lock to prevent concurrent duplicate loading.
         """
         if not dataset_id or not str(dataset_id).strip():
@@ -263,7 +270,6 @@ class DatasetRuntimeManager:
                     return existing_runtime
 
             logger.info(f"[DatasetRuntime] CACHE MISS dataset={clean_id}")
-            logger.info(f"[DatasetRuntime] Loading from Supabase Storage...")
             t0 = time.perf_counter()
 
             # If existing DataFrame & info are passed directly (e.g. from file upload pipeline)
@@ -277,6 +283,13 @@ class DatasetRuntimeManager:
                     "column_count": len(existing_df.columns)
                 }
                 cleaning_report = existing_info.get("cleaning_report") or {"clean_dataset": True, "rows_removed": 0}
+
+                # Save local disk copy for ultra-fast restart reloads
+                try:
+                    local_pq = PROCESSED_DIR / f"{clean_id}.parquet"
+                    existing_df.to_parquet(local_pq, index=False)
+                except Exception:
+                    pass
 
                 runtime = DatasetRuntime(
                     dataset_id=clean_id,
@@ -298,7 +311,23 @@ class DatasetRuntimeManager:
                 logger.info(f"[DatasetRuntime] Runtime created in {duration:.3f}s")
                 return runtime
 
-            # Query Supabase PostgreSQL datasets metadata
+            # Check local disk cache first (< 20ms load)
+            local_parquet = PROCESSED_DIR / f"{clean_id}.parquet"
+            local_csv = PROCESSED_DIR / f"{clean_id}.csv"
+
+            disk_df = None
+            if local_parquet.exists():
+                try:
+                    disk_df = pd.read_parquet(local_parquet)
+                except Exception:
+                    pass
+            elif local_csv.exists():
+                try:
+                    disk_df = pd.read_csv(local_csv)
+                except Exception:
+                    pass
+
+            # Query Supabase PostgreSQL datasets metadata for schema/version
             try:
                 with get_supabase_connection() as conn:
                     with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -307,43 +336,55 @@ class DatasetRuntimeManager:
 
                         if ds_row:
                             version_str = str(ds_row.get("updated_at") or time.time())
-                            storage_service = SupabaseStorageService()
-                            cur.execute(
-                                """
-                                SELECT storage_path FROM public.dataset_files 
-                                WHERE dataset_id = %s AND file_role = 'processed'
-                                ORDER BY created_at DESC LIMIT 1;
-                                """,
-                                (clean_id,)
-                            )
-                            file_row = cur.fetchone()
+                            df = disk_df
 
-                            content_bytes = None
-                            if file_row and file_row.get("storage_path"):
-                                content_bytes = storage_service.download_file(file_row["storage_path"])
-
-                            if not content_bytes:
+                            if df is None:
+                                logger.info(f"[DatasetRuntime] Downloading dataset={clean_id} from Supabase Storage...")
+                                storage_service = SupabaseStorageService()
                                 cur.execute(
                                     """
                                     SELECT storage_path FROM public.dataset_files 
-                                    WHERE dataset_id = %s 
+                                    WHERE dataset_id = %s AND file_role = 'processed'
                                     ORDER BY created_at DESC LIMIT 1;
                                     """,
                                     (clean_id,)
                                 )
-                                fallback_row = cur.fetchone()
-                                if fallback_row:
-                                    content_bytes = storage_service.download_file(fallback_row["storage_path"])
+                                file_row = cur.fetchone()
 
-                            if content_bytes:
-                                try:
-                                    df = pd.read_parquet(io.BytesIO(content_bytes))
-                                except Exception:
+                                content_bytes = None
+                                if file_row and file_row.get("storage_path"):
+                                    content_bytes = storage_service.download_file(file_row["storage_path"])
+
+                                if not content_bytes:
+                                    cur.execute(
+                                        """
+                                        SELECT storage_path FROM public.dataset_files 
+                                        WHERE dataset_id = %s 
+                                        ORDER BY created_at DESC LIMIT 1;
+                                        """,
+                                        (clean_id,)
+                                    )
+                                    fallback_row = cur.fetchone()
+                                    if fallback_row:
+                                        content_bytes = storage_service.download_file(fallback_row["storage_path"])
+
+                                if content_bytes:
                                     try:
-                                        df = pd.read_csv(io.BytesIO(content_bytes))
+                                        df = pd.read_parquet(io.BytesIO(content_bytes))
                                     except Exception:
-                                        df = pd.read_excel(io.BytesIO(content_bytes))
+                                        try:
+                                            df = pd.read_csv(io.BytesIO(content_bytes))
+                                        except Exception:
+                                            df = pd.read_excel(io.BytesIO(content_bytes))
 
+                                    # Save local parquet copy for future sub-second reloads
+                                    if df is not None:
+                                        try:
+                                            df.to_parquet(local_parquet, index=False)
+                                        except Exception:
+                                            pass
+
+                            if df is not None:
                                 schema = _parse_json_field(ds_row.get("schema_json")) or infer_schema(df)
                                 profile = _parse_json_field(ds_row.get("profile_json")) or profile_dataset(df, schema)
                                 metadata = _parse_json_field(ds_row.get("metadata_json")) or {
@@ -375,7 +416,7 @@ class DatasetRuntimeManager:
                                 logger.info(f"[DatasetRuntime] Runtime created in {duration:.3f}s")
                                 return runtime
             except Exception as e:
-                logger.error(f"Error loading dataset {clean_id} from Supabase: {e}")
+                logger.error(f"Error loading dataset {clean_id}: {e}")
 
             return None
 

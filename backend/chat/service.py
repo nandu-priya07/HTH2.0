@@ -237,15 +237,16 @@ class ChatService:
         self,
         conversation_id: Optional[str],
         user_message_text: str,
-        dataset_id: Optional[str] = None
+        dataset_id: Optional[str] = None,
+        existing_conversation: Optional[Conversation] = None
     ) -> Conversation:
         """
         Ensures a conversation exists, associates dataset if present,
         and auto-generates a useful title on the first user message.
         """
-        conversation = None
+        conversation = existing_conversation
 
-        if conversation_id:
+        if conversation_id and not conversation:
             conversation = self.get_conversation(conversation_id)
 
         if not conversation:

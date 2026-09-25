@@ -202,9 +202,6 @@ class SupabaseChatRepository(BaseChatRepository):
         query_spec: Optional[Dict[str, Any]] = None,
         file_id: Optional[str] = None
     ) -> Message:
-        if not self.get_conversation(conversation_id):
-            raise ValueError("Conversation was not found for this account.")
-
         mid = message_id or str(uuid.uuid4())
         now = utc_now_iso()
         role_clean = (role or "user").strip().lower()
@@ -248,9 +245,6 @@ class SupabaseChatRepository(BaseChatRepository):
         )
 
     def get_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[Message]:
-        if not self.get_conversation(conversation_id):
-            return []
-
         with get_supabase_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 if limit and limit > 0:
@@ -316,9 +310,6 @@ class SupabaseChatRepository(BaseChatRepository):
                 return cur.rowcount > 0
 
     def add_file(self, conversation_id: str, file_meta: Dict[str, Any]) -> Dict[str, Any]:
-        if not self.get_conversation(conversation_id):
-            raise ValueError("Conversation was not found for this account.")
-
         metadata = dict(file_meta)
         now = metadata.get("created_at") or utc_now_iso()
 
@@ -337,9 +328,6 @@ class SupabaseChatRepository(BaseChatRepository):
         return metadata
 
     def get_files(self, conversation_id: str) -> List[Dict[str, Any]]:
-        if not self.get_conversation(conversation_id):
-            return []
-
         with get_supabase_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
