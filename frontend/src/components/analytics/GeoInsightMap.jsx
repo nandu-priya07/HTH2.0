@@ -62,7 +62,7 @@ export default function GeoInsightMap({ geojson, mapData = [], results = [], sel
   const min = Math.min(...values), max = Math.max(...values)
   const color = (value) => {
     const t = max === min ? 0.65 : (Number(value) - min) / (max - min)
-    return `rgba(139,92,246,${0.16 + Math.max(0, Math.min(1,t)) * 0.82})`
+    return `rgba(37,99,235,${0.12 + Math.max(0, Math.min(1,t)) * 0.78})`
   }
   const active = hovered || valueMap.get(normalize(selected))
   if (!items.length) return <div className="geo-map-empty">{boundaryStatus === 'unavailable' ? <><strong>{entityLabel} boundaries could not be resolved.</strong><span>{unresolvedCount.toLocaleString()} {entityLabel} values were analyzed successfully. The ranking remains available.</span></> : <>No matching geographic boundaries are available. The location ranking remains available.</>}</div>
@@ -76,7 +76,7 @@ export default function GeoInsightMap({ geojson, mapData = [], results = [], sel
         const matched = candidates.find((item)=>item.parent_name && normalize(item.parent_name)===normalize(featureParent)) || candidates[0]
         const row = matched && valueMap.get(normalize(matched.location ?? matched.name))
         const isSelected = row && normalize(row.location ?? row.name) === normalize(selected)
-        return <path key={`${props.ADM0_A3 || props.HASC_1 || geometryName}-${index}`} d={geometryPath(feature.geometry, project)} fill={row ? color(row.value ?? row.metric) : '#252b38'} className={`geo-country${isSelected ? ' is-selected' : ''}${row ? ' has-value' : ''}`} onMouseEnter={() => row && setHovered(row)} onMouseLeave={() => setHovered(null)} onClick={() => row && onSelect(row.location ?? row.name)}>
+        return <path key={`${props.ADM0_A3 || props.HASC_1 || geometryName}-${index}`} d={geometryPath(feature.geometry, project)} fill={row ? color(row.value ?? row.metric) : '#E8F2FA'} className={`geo-country${isSelected ? ' is-selected' : ''}${row ? ' has-value' : ''}`} onMouseEnter={() => row && setHovered(row)} onMouseLeave={() => setHovered(null)} onClick={() => row && onSelect(row.location ?? row.name)}>
           <title>{row ? `${row.location ?? row.name} · ${metricName}: ${Number(row.value ?? row.metric).toLocaleString()} · rank #${row.rank}` : ''}</title>
         </path>
       })}
